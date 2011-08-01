@@ -18,20 +18,19 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <string>
-#include <boost/random.hpp>
-#include <boost/random/normal_distribution.hpp>
 #include "slamtypes.h"
 #include "slamparams.h"
-#include "cuda.h"
-#include "cutil_inline.h"
+#include "cutil.h"
 #include <assert.h>
 #include <float.h>
-#include <device_functions.h>
 //#include "cuPrintf.cu"
 #include "matrix.h"
 #include "mat.h"
 
 //#include "ConstantVelocity2DKinematicModel.cu"
+
+// include gcc-compiled boost rng
+#include "rng.h"
 
 #ifdef __CDT_PARSER__
 #define __device__
@@ -58,6 +57,10 @@ phdPredict( ParticleSLAM& particles ) ;
 
 extern "C"
 void
+phdPredictVp( ParticleSLAM& particles ) ;
+
+extern "C"
+void
 addBirths( ParticleSLAM& particles, measurementSet ZPrev ) ;
 
 extern "C"
@@ -80,9 +83,6 @@ extern SlamConfig config ;
 
 // device memory limit, externally declared
 extern size_t deviceMemLimit ;
-
-// random number generator engine
-boost::taus88 rng_g ;
 
 const char * filename = "data/measurements2.txt" ;
 bool breakUpdate = false ;
@@ -196,22 +196,23 @@ __device__ REAL
 computeMahalDist(Gaussian2D a, Gaussian2D b)
 {
 	REAL innov[2] ;
-	REAL sigma[4] ;
+//	REAL sigma[4] ;
 	REAL detSigma ;
 	REAL sigmaInv[4] = {1,0,0,1} ;
 	innov[0] = a.mean[0] - b.mean[0] ;
 	innov[1] = a.mean[1] - b.mean[1] ;
-	sigma[0] = a.cov[0] + b.cov[0] ;
-	sigma[1] = a.cov[1] + b.cov[1] ;
-	sigma[2] = a.cov[2] + b.cov[2] ;
-	sigma[3] = a.cov[3] + b.cov[3] ;
-	detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
+//	sigma[0] = a.cov[0] + b.cov[0] ;
+//	sigma[1] = a.cov[1] + b.cov[1] ;
+//	sigma[2] = a.cov[2] + b.cov[2] ;
+//	sigma[3] = a.cov[3] + b.cov[3] ;
+//	detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
+    detSigma = a.cov[0]*a.cov[3] - a.cov[1]*a.cov[2] ;
 //	if (detSigma > DBL_EPSILON)
 //	{
-		sigmaInv[0] = sigma[3]/detSigma ;
-		sigmaInv[1] = -sigma[1]/detSigma ;
-		sigmaInv[2] = -sigma[2]/detSigma ;
-		sigmaInv[3] = sigma[0]/detSigma ;
+        sigmaInv[0] = a.cov[3]/detSigma ;
+        sigmaInv[1] = -a.cov[1]/detSigma ;
+        sigmaInv[2] = -a.cov[2]/detSigma ;
+        sigmaInv[3] = a.cov[0]/detSigma ;
 //	}
 	return  innov[0]*innov[0]*sigmaInv[0] +
 			innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
@@ -270,12 +271,12 @@ phdPredictVp(ParticleSLAM& particles, AckermanControl control )
     // generate random noise values
     int nParticles = particles.nParticles ;
     std::vector<AckermanNoise> noiseVector(nParticles) ;
-    boost::normal_distribution<double> normal_dist ;
-    boost::variate_generator< boost::taus88, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
+//    boost::normal_distribution<double> normal_dist ;
+//    boost::variate_generator< boost::taus88, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
     for (unsigned int i = 0 ; i < nParticles ; i++ )
     {
-        noiseVector[i].n_alpha = config.std_alpha * var_gen() ;
-        noiseVector[i].n_encoder = config.std_encoder * var_gen() ;
+        noiseVector[i].n_alpha = config.std_alpha * randn() ;
+        noiseVector[i].n_encoder = config.std_encoder * randn() ;
     }
 
     // copy to device memory
@@ -356,13 +357,13 @@ phdPredict(ParticleSLAM& particles)
 	// generate random noise values
     int nParticles = particles.nParticles ;
 	std::vector<ConstantVelocityNoise> noiseVector(nParticles) ;
-    boost::normal_distribution<double> normal_dist ;
-    boost::variate_generator< boost::taus88, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
+//    boost::normal_distribution<double> normal_dist ;
+//    boost::variate_generator< boost::taus88, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
 	for (unsigned int i = 0 ; i < nParticles ; i++ )
 	{
-        noiseVector[i].ax = 3*STDX * var_gen() ;
-        noiseVector[i].ay = 3*STDY * var_gen() ;
-        noiseVector[i].atheta = 3*STDTHETA * var_gen() ;
+        noiseVector[i].ax = 3*STDX * randn() ;
+        noiseVector[i].ay = 3*STDY * randn() ;
+        noiseVector[i].atheta = 3*STDTHETA * randn() ;
 	}
 
 	// copy to device memory
@@ -456,7 +457,7 @@ void addBirths(ParticleSLAM& particles, measurementSet measurements )
 	cudaEventRecord( start, 0 ) ;
 
 	// allocate inputs on device
-	DEBUG_MSG("Allocating inputs") ;
+//	DEBUG_MSG("Allocating inputs") ;
 	ConstantVelocityState* d_particles ;
 	RangeBearingMeasurement* d_measurements ;
 	char* devCompatibleZ ;
@@ -481,14 +482,14 @@ void addBirths(ParticleSLAM& particles, measurementSet measurements )
 	cudaMemcpy( devCompatibleZ, &compatibleZ[0], nParticles*nMeasurements*sizeof(char), cudaMemcpyHostToDevice ) ;
 
 	// allocate outputs on device
-	DEBUG_MSG("Allocating outputs") ;
+//	DEBUG_MSG("Allocating outputs") ;
 	Gaussian2D* d_births ;
 	int nBirths = nMeasurements*nParticles ;
 	size_t birthsSize = nBirths*sizeof(Gaussian2D) ;
 	cudaMalloc( (void**)&d_births, birthsSize ) ;
 
 	// call the kernel
-	DEBUG_MSG("Launching Kernel") ;
+//	DEBUG_MSG("Launching Kernel") ;
 	cudaError errcode ;
 	if ( (errcode = cudaPeekAtLastError()) != cudaSuccess )
 	{
@@ -499,7 +500,7 @@ void addBirths(ParticleSLAM& particles, measurementSet measurements )
 			d_measurements, devCompatibleZ, d_births ) ;
 
 	// retrieve outputs from device
-	DEBUG_MSG("Saving birth terms") ;
+//	DEBUG_MSG("Saving birth terms") ;
 	Gaussian2D *births = new Gaussian2D[nBirths] ;
 	cudaMemcpy( births, d_births, birthsSize, cudaMemcpyDeviceToHost ) ;
 	vector<Gaussian2D> birthVector(births, births + nBirths) ;
@@ -662,7 +663,8 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
 	__shared__ REAL meanMerge[2] ;
 	__shared__ REAL covMerge[4] ;
 	__shared__ int mergedSize ;
-	__shared__ REAL cardinalityPredict ;
+    __shared__ REAL cardinality_predict ;
+    __shared__ REAL cardinality_updated ;
 
 	// initialize variables
 	int tid = threadIdx.x ;
@@ -705,12 +707,16 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
 		nUpdate = nFeatures*(nMeasurements+1) ;
 		if ( tid < nMeasurements )
 			compatibleZ[mapIdx*nMeasurements + tid] = 0 ;
+
+        // initialize shared variables
 		if ( tid == 0 )
 		{
 			pose = poses[mapIdx] ;
 			particleWeights[mapIdx] = 0 ;
 			mergedSize = 0 ;
 			mergedSizes[mapIdx] = nUpdate ;
+            cardinality_predict = 0.0 ;
+            cardinality_updated = 0.0 ;
 		}
 		__syncthreads() ;
 
@@ -802,10 +808,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
 			covUpdate[3] = 0 ;
 		}
 
-		// predicted cardinality
+        // predicted cardinality = sum of weights*pd
 		sumByReduction(sdata, feature.weight*featurePd, tid) ;
 		if ( tid == 0 )
-			cardinalityPredict = sdata[0] ;
+            cardinality_predict = sdata[0] ;
 		__syncthreads() ;
 
 		/*
@@ -855,7 +861,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
             weightUpdate = wPartial/(sdata[0] + dev_config.clutterDensity ) ;
 
 
-			if ( tid == 0 )
+            if ( tid == 0 && dev_config.particleWeighting == 0 )
 			{
                 particleWeights[mapIdx] += log(sdata[0] + dev_config.clutterDensity ) ;
 			}
@@ -870,7 +876,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
 				updatedFeatures[updateIdx].cov[1] = covUpdate[1] ;
 				updatedFeatures[updateIdx].cov[2] = covUpdate[2] ;
 				updatedFeatures[updateIdx].cov[3] = covUpdate[3] ;
-				if ( weightUpdate >= MINGAUSSIANWEIGHT)
+                if ( weightUpdate >= dev_config.minFeatureWeight)
 				{
 					mergedFlags[updateIdx] = false ;
 				}
@@ -880,11 +886,45 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
 				}
 			}
 		}
-		if ( tid == 0 )
-		{
-			particleWeights[mapIdx] -= cardinalityPredict ;
-			particleWeights[mapIdx] = exp(particleWeights[mapIdx]) ;
-		}
+
+        // Cluster-PHD particle weighting
+        if ( dev_config.particleWeighting == 0 )
+        {
+            if ( tid == 0 )
+            {
+                particleWeights[mapIdx] -= cardinality_predict ;
+                particleWeights[mapIdx] = exp(particleWeights[mapIdx]) ;
+            }
+        }
+        // Vo-EmptyMap particle weighting
+        else if ( dev_config.particleWeighting == 1 )
+        {
+            // updated cardinality = sum of updated weights
+            for ( int i = 0 ; i < nUpdate ; i += blockDim.x )
+            {
+                // to avoid divergence in the reduction function call, load weight
+                // into temp variable first
+                if ( tid + i < nUpdate )
+                    wPartial = updatedFeatures[i+tid].weight ;
+                else
+                    wPartial = 0.0 ;
+                sumByReduction( sdata, wPartial, tid );
+                if ( tid == 0 )
+                    cardinality_updated += sdata[0] ;
+            }
+
+            // compute product of clutter densities by parallel reduction
+            if ( tid < nMeasurements )
+                wPartial = dev_config.clutterDensity ;
+            else
+                wPartial = 1.0 ;
+            productByReduction( sdata, wPartial, tid ) ;
+            if ( tid == 0 )
+            {
+                particleWeights[mapIdx] = sdata[0] * exp(cardinality_updated - cardinality_predict - dev_config.clutterRate ) ;
+            }
+        }
+
 		/*
 		 * END PHD UPDATE
 		 */
@@ -965,7 +1005,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
                         dist = computeMahalDist(maxFeature, feature )
                                 *maxFeature.weight*feature.weight
                                 /(maxFeature.weight+feature.weight );
-						if ( dist < MINSEPARATION )
+                        if ( dist < dev_config.minSeparation )
 						{
 							sval0 += feature.weight ;
 							sval1 += feature.mean[0]*feature.weight ;
@@ -1004,7 +1044,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* mapSizes,
                         dist = computeMahalDist(maxFeature, feature )
                                 *maxFeature.weight*feature.weight
                                 /(maxFeature.weight+feature.weight );
-						if ( dist < MINSEPARATION )
+                        if ( dist < dev_config.minSeparation )
 						{
 							innov[0] = meanMerge[0] - feature.mean[0] ;
 							innov[1] = meanMerge[1] - feature.mean[1] ;
@@ -1160,6 +1200,8 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     int n_out_range = totalFeatures - n_in_range ;
 
     // divide features into in-range/out-of-range parts
+    DEBUG_VAL(n_in_range) ;
+    DEBUG_VAL(n_out_range) ;
     gaussianMixture features_in(n_in_range) ;
     gaussianMixture features_out(n_out_range ) ;
     int idx_in = 0 ;
@@ -1190,9 +1232,10 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
 	if ( nMeasurements > MAXMEASUREMENTS )
 	{
 		DEBUG_MSG("Warning: maximum number of measurements per time step exceeded") ;
-		DEBUG_VAL(nMeasurements-MAXMEASUREMENTS) ;
+//		DEBUG_VAL(nMeasurements-MAXMEASUREMENTS) ;
 		nMeasurements = MAXMEASUREMENTS ;
 	}
+    DEBUG_VAL(nMeasurements) ;
 
     // check device memory limit and split into multiple kernel launches if
     // necessary
@@ -1297,6 +1340,11 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                            nParticles*sizeof(REAL),cudaMemcpyDeviceToHost ) ) ;
 
     CUDA_SAFE_CALL(
+                cudaMemcpy( maps_updated, dev_maps_updated,
+                            nUpdate*sizeof(Gaussian2D),
+                            cudaMemcpyDeviceToHost ) ) ;
+
+    CUDA_SAFE_CALL(
                 cudaMemcpy( maps_merged, dev_maps_merged,
                             nUpdate*sizeof(Gaussian2D),
                             cudaMemcpyDeviceToHost ) ) ;
@@ -1343,8 +1391,8 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     }
 
     // save compatible measurement flags
-    particles.compatibleZ.assign( compatibleZ,
-                                  compatibleZ+nParticles*nMeasurements) ;
+    particles.compatibleZ.assign( compatible_z,
+                                  compatible_z+nParticles*nMeasurements) ;
 
     // normalize particle weights
     for (int i = 0 ; i < nParticles ; i++ )
@@ -1958,23 +2006,19 @@ void mergeGaussianMixture(gaussianMixture *GM)
 	cudaEventRecord( start, 0 ) ;
 
 //	DEBUG_MSG("Allocating inputs") ;
-	cudaMalloc( (void**)&devGaussians, GMSize ) ;
-	cudaMemcpy( devGaussians, &GM->front(), GMSize, cudaMemcpyHostToDevice ) ;
+    CUDA_SAFE_CALL( cudaMalloc( (void**)&devGaussians, GMSize ) ) ;
+    CUDA_SAFE_CALL(
+                cudaMemcpy( devGaussians, &GM->front(), GMSize,
+                            cudaMemcpyHostToDevice ) ) ;
 
 //	DEBUG_MSG("Allocating outputs") ;
 	int *devSizeMerged ;
 	bool *devMergedFlags ;
-	cudaMalloc( (void**)&devGaussiansMerged, GMSize ) ;
-	cudaMalloc( (void**)&devSizeMerged, sizeof(int) ) ;
-	cudaMalloc( (void**)&devMergedFlags, nFeatures*sizeof(bool) ) ;
+    CUDA_SAFE_CALL( cudaMalloc( (void**)&devGaussiansMerged, GMSize ) ) ;
+    CUDA_SAFE_CALL( cudaMalloc( (void**)&devSizeMerged, sizeof(int) ) ) ;
+    CUDA_SAFE_CALL( cudaMalloc( (void**)&devMergedFlags, nFeatures*sizeof(bool) ) ) ;
 
 	DEBUG_MSG("Launching kernel...") ;
-	cudaError errcode ;
-	if ( (errcode = cudaPeekAtLastError()) != cudaSuccess )
-	{
-		cout << "Error before kernel launch: " << cudaGetErrorString(errcode) << endl ;
-		exit(0) ;
-	}
 	// kernel call
     mergeKernelSingle<<<1,256>>>( devGaussians, nFeatures,
 			devGaussiansMerged, devMergedFlags, devSizeMerged ) ;;
@@ -1984,14 +2028,19 @@ void mergeGaussianMixture(gaussianMixture *GM)
 	Gaussian2D *maxFeatures = new Gaussian2D[nBlocks] ;
 	bool *hostMergedFlags = new bool[nFeatures] ;
 //	cudaMemcpy( maxFeatures, devMaxFeature, nBlocks*sizeof(Gaussian2D), cudaMemcpyDeviceToHost ) ;
-	cudaMemcpy( &nMerged, devSizeMerged, sizeof(int), cudaMemcpyDeviceToHost ) ;
-	cudaMemcpy( hostMergedFlags, devMergedFlags, nFeatures*sizeof(bool), cudaMemcpyDeviceToHost ) ;
+    CUDA_SAFE_CALL(
+                cudaMemcpy( &nMerged, devSizeMerged, sizeof(int),
+                            cudaMemcpyDeviceToHost ) ) ;
+    CUDA_SAFE_CALL(
+                cudaMemcpy( hostMergedFlags, devMergedFlags,
+                            nFeatures*sizeof(bool), cudaMemcpyDeviceToHost ) ) ;
 	DEBUG_VAL(nMerged) ;
 
 	gaussianMixture gaussiansMerged(nMerged) ;
 	Gaussian2D *tmp = new Gaussian2D[nMerged] ;
-	cudaMemcpy( tmp, devGaussiansMerged, nMerged*sizeof(Gaussian2D),
-			cudaMemcpyDeviceToHost ) ;
+    CUDA_SAFE_CALL(
+                cudaMemcpy( tmp, devGaussiansMerged, nMerged*sizeof(Gaussian2D),
+                            cudaMemcpyDeviceToHost ) ) ;
 	GM->assign(tmp, tmp+nMerged) ;
 
 	cudaEventRecord( stop, 0 ) ;
@@ -2013,11 +2062,11 @@ void mergeGaussianMixture(gaussianMixture *GM)
 
 ParticleSLAM resampleParticles( ParticleSLAM oldParticles )
 {
-    boost::uniform_01<> uni_dist ;
+//    boost::uniform_01<> uni_dist ;
 	unsigned int nParticles = oldParticles.nParticles ;
 	ParticleSLAM newParticles(nParticles) ;
 	REAL interval = 1.0/nParticles ;
-    REAL r = uni_dist( rng_g ) * interval ;
+    REAL r = randu01() * interval ;
 	REAL c = oldParticles.weights[0] ;
 	int i = 0 ;
 //	DEBUG_VAL(interval) ;

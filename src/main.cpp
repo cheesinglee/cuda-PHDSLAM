@@ -562,8 +562,9 @@ int main(int argc, char *argv[])
                 timeFile.close() ;
 #ifdef DEBUG
                 DEBUG_MSG( "Writing Log" ) ;
-//		writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
-//		writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
+        writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
+        writeParticles(particles,"particles",n) ;
+//        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
                 writeLogMat(particles, ZZ, expectedPose, expectedMap, n) ;
 #endif
                 if ( isnan(nEff) )
