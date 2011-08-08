@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <stdlib.h>
 
-#define REAL double
+#define REAL float
 
 using namespace std ;
 
@@ -117,8 +117,10 @@ typedef struct{
     REAL clutterDensity ;
     REAL pd ;
     int nParticles ;
+	int nPredictParticles ;
     REAL resampleThresh ;
     REAL birthWeight ;
+	REAL birthNoiseFactor ;
     bool gatedBirths ;
     REAL minExpectedFeatureWeight ;
     REAL minSeparation ;
@@ -144,7 +146,7 @@ typedef map<string, REAL> filterConfig ;
 class ParticleSLAM{
 public:
     int nParticles ;
-    vector<double> weights ;
+	vector<REAL> weights ;
     vector<ConstantVelocityState> states ;
     vector<gaussianMixture> maps ;
 	vector<char> compatibleZ ;

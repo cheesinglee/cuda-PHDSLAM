@@ -29,7 +29,7 @@
 #define DT 0.1
 #define DT2 DT*DT
 
-#define MAXRANGE 20
+#define MAXRANGE 18
 #define MAXBEARING M_PI
 #define INFLATENOISE 1
 #define STDRANGE 1

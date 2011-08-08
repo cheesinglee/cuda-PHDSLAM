@@ -18,9 +18,11 @@ DESTDIR = $$PROJECT_DIR/bin
 QMAKE_CFLAGS += -DDEBUG
 
 ### MATLAB external interface ###############################################
-QMAKE_RPATHDIR += /home/cheesinglee/matlab2010a/bin/glnxa64
-LIBS += -L/home/cheesinglee/matlab2010a/bin/glnxa64/ -lmx -lmat
-INCLUDEPATH += /home/cheesinglee/matlab2010a/extern/include
+#MATLAB_PATH = /home/cheesinglee/matlab2010a/
+MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
+QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
+LIBS += -L$$MATLAB_PATH/bin/glnxa64/ -lmx -lmat
+INCLUDEPATH += $$MATLAB_PATH/extern/include
 #############################################################################
 
 #### Boost libraries ###################################################
@@ -30,15 +32,20 @@ CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options
 
 # Path to cuda SDK install
-CUDA_SDK = /usr/share/cuda-sdk/C
+#CUDA_SDK = /usr/share/cuda-sdk/C
+CUDA_SDK = /opt/cuda/sdk/C
 # Path to cuda toolkit install
-CUDA_DIR = /usr/
+# CUDA_DIR = /usr/ # for my machines
+CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
-CUDA_ARCH = sm_20
+CUDA_GENCODE = arch=compute_13,code=sm_13
 # nvcc flags (ptxas option verbose is always useful)
-NVCCFLAGS = --compiler-options -fno-strict-aliasing,-fpermissive --ptxas-options=-v --compiler-bindir=/opt/gcc-4.4 --linker-options -rpath=/home/cheesinglee/matlab2010a/bin/glnxa64
+#CUDA_GCC_BINDIR=/opt/gcc-4.4
+CUDA_GCC_BINDIR=/usr/bin
+NVCCFLAGS = --compiler-options -fno-strict-aliasing,-fpermissive --ptxas-options=-v --compiler-bindir=$$CUDA_GCC_BINDIR --linker-options -rpath=$$MATLAB_PATH/bin/glnxa64
 # include paths
 INCLUDEPATH += $$CUDA_DIR/include/cuda/
+INCLUDEPATH += $$CUDA_DIR/include/
 INCLUDEPATH += $$CUDA_SDK/common/inc/
 INCLUDEPATH += $$CUDA_SDK/../shared/inc/
 # lib dirs
@@ -54,7 +61,7 @@ CUDA_INC = $$join(INCLUDEPATH,' -I','-I',' ')
 cuda.input = CUDA_SOURCES
 cuda.output = ${OBJECTS_DIR}${QMAKE_FILE_BASE}_cuda.o
 
-cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -arch=$$CUDA_ARCH -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
+cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -O0 -gencode=$$CUDA_GENCODE -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
 
 cuda.dependcy_type = TYPE_C
 cuda.depend_command = $$CUDA_DIR/bin/nvcc -g -G -M $$CUDA_INC $$NVCCFLAGS ${QMAKE_FILE_NAME}

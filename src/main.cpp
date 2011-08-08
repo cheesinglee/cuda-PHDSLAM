@@ -48,7 +48,7 @@ ParticleSLAM
 phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
 
 extern "C"
-ParticleSLAM resampleParticles( ParticleSLAM oldParticles ) ;
+ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_particles_new = -1 ) ;
 
 extern "C"
 void recoverSlamState(ParticleSLAM particles, ConstantVelocityState *expectedPose,
@@ -385,8 +385,10 @@ void loadConfig(const char* filename)
             ("clutter_rate", value<REAL>(&config.clutterRate)->default_value(15), "Poisson mean number of clutter measurements per scan")
             ("pd", value<REAL>(&config.pd)->default_value(0.98), "Nominal probability of detection for in-range features")
             ("n_particles", value<int>(&config.nParticles)->default_value(512), "Number of vehicle pose particles")
+			("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
             ("resample_threshold", value<REAL>(&config.resampleThresh)->default_value(0.15), "Threshold on normalized nEff for particle resampling")
             ("birth_weight", value<REAL>(&config.birthWeight)->default_value(0.05), "Weight of birth features")
+			("birth_noise_factor", value<REAL>(&config.birthNoiseFactor)->default_value(1.5), "Factor which multiplies the measurement noise to determine covariance of birth features")
             ("gated_births", value<bool>(&config.gatedBirths)->default_value(true), "Enable measurement gating on births")
             ("min_expected_feature_weight", value<REAL>(&config.minExpectedFeatureWeight)->default_value(0.33), "Minimum feature weight for expected map")
             ("min_separation", value<REAL>(&config.minSeparation)->default_value(5), "Minimum Mahalanobis separation between features")
@@ -408,17 +410,18 @@ void loadConfig(const char* filename)
         variables_map vm ;
         try{
             store( parse_config_file( ifs, desc ), vm ) ;
-            vm.notify() ;
+						notify(vm) ;
+//            vm.notify() ;
             // compute clutter density
             config.clutterDensity = config.clutterRate/
                                     ( pow(config.maxRange,2)*config.maxBearing ) ;
-            #ifdef DEBUG
-            variables_map::iterator it ;
-            for ( it = vm.begin() ; it != vm.end() ; it++ )
-            {
-                cout << it->first << " => " << it->second.as<REAL>() << endl ;
-            }
-            #endif
+//            #ifdef DEBUG
+//            variables_map::iterator it ;
+//            for ( it = vm.begin() ; it != vm.end() ; it++ )
+//            {
+//                cout << it->first << " => " << it->second.as<REAL>() << endl ;
+//            }
+//            #endif
         }
         catch( std::exception& e )
         {
@@ -530,28 +533,28 @@ int main(int argc, char *argv[])
 //                else
 //                        breakUpdate = false ;
                 ZZ = allMeasurements[n] ;
-                cout << "Performing prediction" << endl ;
+				if (ZPrev.size() > 0 )
+				{
+						cout << "Adding birth terms" << endl ;
+						addBirths(particles,ZPrev) ;
+				}
+				cout << "Performing vehicle prediction" << endl ;
                 phdPredict(particles) ;
-                if (ZPrev.size() > 0 )
-                {
-                        cout << "Adding birth terms" << endl ;
-                        addBirths(particles,ZPrev) ;
-                }
                 if ( ZZ.size() > 0 )
                 {
                         cout << "Performing PHD Update" << endl ;
                         particlesPreMerge = phdUpdate(particles, ZZ) ;
                 }
                 nEff = 0 ;
-                for ( int i = 0; i < config.nParticles ; i++)
+				for ( int i = 0; i < particles.nParticles ; i++)
                         nEff += particles.weights[i]*particles.weights[i] ;
-                nEff = 1.0/nEff/config.nParticles ;
+				nEff = 1.0/nEff/particles.nParticles ;
                 DEBUG_VAL(nEff) ;
-                if (nEff <= config.resampleThresh )
-                {
+//                if (nEff <= config.resampleThresh )
+//                {
                         DEBUG_MSG("Resampling particles") ;
-                        particles = resampleParticles(particles) ;
-                }
+						particles = resampleParticles(particles,config.nParticles) ;
+//                }
                 recoverSlamState(particles, &expectedPose, &expectedMap ) ;
                 ZPrev = ZZ ;
                 gettimeofday( &stop, NULL ) ;
@@ -562,7 +565,7 @@ int main(int argc, char *argv[])
                 timeFile.close() ;
 #ifdef DEBUG
                 DEBUG_MSG( "Writing Log" ) ;
-        writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
+//        writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
         writeParticles(particles,"particles",n) ;
 //        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
                 writeLogMat(particles, ZZ, expectedPose, expectedMap, n) ;
