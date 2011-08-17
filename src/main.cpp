@@ -6,8 +6,12 @@
 #include <algorithm>
 #include <sstream>
 
+// matlab output
 #include <mex.h>
 #include <mat.h>
+
+//// pickling tools
+//#include <chooseser.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -22,7 +26,7 @@
 
 #include <boost/program_options.hpp>
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
     #define DEBUG_MSG(x) cout <<"["<< __func__ << "]: " << x << endl
@@ -51,8 +55,8 @@ extern "C"
 ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_particles_new = -1 ) ;
 
 extern "C"
-void recoverSlamState(ParticleSLAM particles, ConstantVelocityState *expectedPose,
-        gaussianMixture *expectedMap) ;
+void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
+		gaussianMixture& expectedMap) ;
 
 extern "C"
 void setDeviceConfig( const SlamConfig& config ) ;
@@ -202,11 +206,10 @@ writeParticlesMat(ParticleSLAM particles, int t = -1, const char* filename="part
         mxDestroyArray( mxParticles ) ;
 }
 
-void writeLogMat(ParticleSLAM particles,
-                measurementSet Z, ConstantVelocityState expectedPose,
+void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
                 gaussianMixture expectedMap, int t)
 {
-        writeParticlesMat(particles,t) ;
+//        writeParticlesMat(particles,t) ;
 
 //	fstream zFile("measurements.log", fstream::out|fstream::app ) ;
 //	for ( unsigned int n = 0 ; n < Z.size() ; n++ )
@@ -219,26 +222,15 @@ void writeLogMat(ParticleSLAM particles,
 
         // create the filename
         std::ostringstream oss ;
-        oss << "expectation" << t << ".mat" ;
+		oss << "state_estimate" << t << ".mat" ;
         std::string expectationFilename = oss.str() ;
 
-        const char* fieldNames[] = {"pose","map"} ;
-        mxArray* mxStates = mxCreateStructMatrix(1,1,2,fieldNames) ;
-
-//	// create the expected state mat file if it doesn't exist
-//	MATFile* expectationFile ;
-//	if ( !(expectationFile = matOpen("expectation.mat", "u" )) )
-//		expectationFile = matOpen("expectation.mat", "w" ) ;
-//
-//	// create the structure of expected states if it doesn't exist
-//	mxArray* mxStates ;
-//	if ( !(mxStates = matGetVariable( expectationFile, "expectation" ) ) )
-//	{
-//		const char* fieldNames[] = {"pose","map"} ;
-//		mxStates = mxCreateStructMatrix(1,1,2,fieldNames) ;
-//	}
+		const char* fieldNames[] = {"pose","map","particles"} ;
+		mxArray* mxStates = mxCreateStructMatrix(1,1,3,fieldNames) ;
 
         // pack data into mxArrays
+
+		// estimated pose
         mxArray* mxPose = mxCreateNumericMatrix(6,1,mxDOUBLE_CLASS,mxREAL) ;
         mxGetPr( mxPose )[0] = expectedPose.px ;
         mxGetPr( mxPose )[1] = expectedPose.py ;
@@ -247,6 +239,7 @@ void writeLogMat(ParticleSLAM particles,
         mxGetPr( mxPose )[4] = expectedPose.vy ;
         mxGetPr( mxPose )[5] = expectedPose.vtheta ;
 
+		// estimated map
         const char* mapFieldNames[] = {"weights","means","covs"} ;
         mxArray* mxMap = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
         int nFeatures = expectedMap.size() ;
@@ -268,17 +261,35 @@ void writeLogMat(ParticleSLAM particles,
                         mxGetPr( mxCovs )[4*i+3] = expectedMap[i].cov[3] ;
                 }
         }
-
         mxSetFieldByNumber( mxMap, 0, 0, mxWeights ) ;
         mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
         mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
 
+		// particle poses and weights
+		int n_particles = particles.nParticles ;
+		const char* particle_field_names[] = {"weights","poses"} ;
+		mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
+		mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+		mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+		for ( int i = 0 ; i < n_particles ; i++ )
+		{
+			mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
+			mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
+			mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
+			mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
+			mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
+			mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
+			mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
+		}
+		mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
+		mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
 //	// resize the array to accommodate the new entry
 //	mxSetM( mxStates, t+1 ) ;
 
         // save the new entry
         mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
         mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
+		mxSetFieldByNumber( mxStates, 0, 2, mx_particles) ;
 
         // write to the mat-file
         MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
@@ -361,6 +372,62 @@ void writeLog(ParticleSLAM particles,
         stateFile.close() ;
 }
 
+//void writeParticlesPickle( ParticleSLAM particles, const char* filename, int t = -1 )
+//{
+//	// create the filename
+//	std::string particlesFilename(filename) ;
+//	if ( t >= 0 )
+//	{
+//			char timeStep[8] ;
+//			sprintf(timeStep,"%d",t) ;
+//			particlesFilename += timeStep ;
+//	}
+//	particlesFilename += ".p2" ;
+
+//	Arr weights_arr(particles.nParticles) ;
+//	Arr poses_arr(particles.nParticles) ;
+//	Arr maps_arr( particles.nParticles ) ;
+//	for ( int i = 0 ; i < particles.nParticles ; i++ )
+//	{
+//		weights_arr.append( particles.weights[i] ) ;
+
+//		Arr single_pose(6) ;
+//		single_pose.append( particles.states[i].px ) ;
+//		single_pose.append( particles.states[i].py ) ;
+//		single_pose.append( particles.states[i].ptheta );
+//		single_pose.append( particles.states[i].vx ) ;
+//		single_pose.append( particles.states[i].vy ) ;
+//		single_pose.append( particles.states[i].vtheta );
+//		poses_arr.append( single_pose ) ;
+
+//		Tab single_map ;
+//		int map_size = particles.maps[i].size() ;
+//		Arr map_weights_arr(map_size) ;
+//		Arr map_means_arr(map_size*2) ;
+//		Arr map_covs_arr(map_size*4) ;
+//		for ( int j = 0 ; j < map_size ; j++ )
+//		{
+//			map_weights_arr.append( particles.maps[i][j].weight ) ;
+//			map_means_arr.append( particles.maps[i][j].mean[0] ) ;
+//			map_means_arr.append( particles.maps[i][j].mean[1] ) ;
+//			map_covs_arr.append( particles.maps[i][j].cov[0] ) ;
+//			map_covs_arr.append( particles.maps[i][j].cov[1] ) ;
+//			map_covs_arr.append( particles.maps[i][j].cov[2] ) ;
+//			map_covs_arr.append( particles.maps[i][j].cov[3] ) ;
+//		}
+//		single_map["weights"] = map_weights_arr ;
+//		single_map["means"] = map_means_arr ;
+//		single_map["covs"] = map_covs_arr ;
+//		maps_arr.append( single_map ) ;
+//	}
+//	Tab particles_tab ;
+//	particles_tab["weights"] = weights_arr ;
+//	particles_tab["poses"] = poses_arr ;
+//	particles_tab["maps"] = maps_arr ;
+
+//	DumpValToFile( particles_tab, particlesFilename, SERIALIZE_P2 ) ;
+//}
+
 void loadConfig(const char* filename)
 {
     using namespace boost::program_options ;
@@ -395,7 +462,11 @@ void loadConfig(const char* filename)
             ("max_features", value<int>(&config.maxFeatures)->default_value(100), "Maximum number of features in map")
             ("min_feature_weight", value<REAL>(&config.minFeatureWeight)->default_value(0.00001), "Minimum feature weight")
             ("particle_weighting", value<int>(&config.particleWeighting)->default_value(1), "Particle weighting scheme: 1 = cluster process 2 = Vo's")
-            ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
+			("daughter_mixture_type", value<int>(&config.daughterMixtureType)->default_value(0), "0: Gaussian, 1: Particle")
+			("n_daughter_particles", value<int>(&config.nDaughterParticles)->default_value(50), "Number of particles to represet each map landmark")
+			("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
+			("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
+			("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -499,7 +570,11 @@ int main(int argc, char *argv[])
                 particles.states[n].vx = INITVX ;
                 particles.states[n].vy = INITVY ;
                 particles.states[n].vtheta = INITVTHETA ;
-                particles.weights[n] = 1.0/config.nParticles ;
+				particles.weights[n] = -log(config.nParticles) ;
+				if ( config.filterType == CPHD_TYPE )
+				{
+					particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
+				}
         }
 
         // check cuda device properties
@@ -544,18 +619,29 @@ int main(int argc, char *argv[])
                 {
                         cout << "Performing PHD Update" << endl ;
                         particlesPreMerge = phdUpdate(particles, ZZ) ;
-                }
+				}
+				cout << "Extracting SLAM state" << endl ;
+				recoverSlamState(particles, expectedPose, expectedMap ) ;
+
+#ifdef DEBUG
+				DEBUG_MSG( "Writing Log" ) ;
+//		writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
+//		writeParticlesMat(particlesPreMerge, n, "particlesPreMerge") ;
+//		writeParticles(particles,"particles",n) ;
+//        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
+		writeLogMat(particles, expectedPose, expectedMap, n) ;
+#endif
+
                 nEff = 0 ;
 				for ( int i = 0; i < particles.nParticles ; i++)
-                        nEff += particles.weights[i]*particles.weights[i] ;
+						nEff += exp(2*particles.weights[i]) ;
 				nEff = 1.0/nEff/particles.nParticles ;
                 DEBUG_VAL(nEff) ;
-//                if (nEff <= config.resampleThresh )
-//                {
-                        DEBUG_MSG("Resampling particles") ;
-						particles = resampleParticles(particles,config.nParticles) ;
-//                }
-                recoverSlamState(particles, &expectedPose, &expectedMap ) ;
+//				if (nEff <= config.resampleThresh )
+//				{
+					DEBUG_MSG("Resampling particles") ;
+					particles = resampleParticles(particles,config.nParticles) ;
+//				}
                 ZPrev = ZZ ;
                 gettimeofday( &stop, NULL ) ;
                 double elapsed = (stop.tv_sec - start.tv_sec)*1000 ;
@@ -563,29 +649,23 @@ int main(int argc, char *argv[])
                 fstream timeFile("loopTime.log", fstream::out|fstream::app ) ;
                 timeFile << elapsed << endl ;
                 timeFile.close() ;
-#ifdef DEBUG
-                DEBUG_MSG( "Writing Log" ) ;
-//        writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
-        writeParticles(particles,"particles",n) ;
-//        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
-                writeLogMat(particles, ZZ, expectedPose, expectedMap, n) ;
-#endif
+
                 if ( isnan(nEff) )
                 {
                         cout << "nan weights detected! exiting..." << endl ;
                         break ;
                 }
-                for ( int i =0 ; i < config.nParticles ; i++ )
-                {
-                        for ( int j = 0 ; j < (int)particles.maps[i].size() ; j++ )
-                        {
-                                if ( particles.maps[i][j].weight == 0 )
-                                {
-                                        DEBUG_MSG("Invalid features detected!") ;
-                                        exit(1) ;
-                                }
-                        }
-                }
+//                for ( int i =0 ; i < config.nParticles ; i++ )
+//                {
+//                        for ( int j = 0 ; j < (int)particles.maps[i].size() ; j++ )
+//                        {
+//                                if ( particles.maps[i][j].weight == 0 )
+//                                {
+//                                        DEBUG_MSG("Invalid features detected!") ;
+//                                        exit(1) ;
+//                                }
+//                        }
+//                }
         }
 #ifdef DEBUG
         string command("mv *.mat ") ;

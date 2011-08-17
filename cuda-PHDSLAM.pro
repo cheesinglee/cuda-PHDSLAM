@@ -6,7 +6,8 @@
 # Basic .pro configuration
 SOURCES += src/main.cpp \
    src/phdfilter.cu \
-    src/rng.cpp
+    src/rng.cpp \
+    src/phdfilterwrapper.cpp
 # Cuda sources
 SOURCES -= src/phdfilter.cu
 CUDA_SOURCES += src/phdfilter.cu
@@ -15,11 +16,23 @@ PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
 DESTDIR = $$PROJECT_DIR/bin
 
-QMAKE_CFLAGS += -DDEBUG
+QMAKE_CXXFLAGS += -DDEBUG
+QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissive -fno-strict-aliasing
+
+# remove qt libs
+CONFIG += dll
+QT     -= gui core
+LIBS   -= -lQtGui -lQtCore
+
+### Pickling Tools ######################################
+INCLUDEPATH += PicklingTools121Release/C++
+INCLUDEPATH += PicklingTools121Release/C++/opencontainers_1_6_9/include
+#########################################################
 
 ### MATLAB external interface ###############################################
 #MATLAB_PATH = /home/cheesinglee/matlab2010a/
-MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
+#MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
+MATLAB_PATH = /opt/Matlab # kermit
 QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
 LIBS += -L$$MATLAB_PATH/bin/glnxa64/ -lmx -lmat
 INCLUDEPATH += $$MATLAB_PATH/extern/include
@@ -32,16 +45,17 @@ CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options
 
 # Path to cuda SDK install
-#CUDA_SDK = /usr/share/cuda-sdk/C
-CUDA_SDK = /opt/cuda/sdk/C
+CUDA_SDK = /usr/share/cuda-sdk/C
+#CUDA_SDK = /opt/cuda/sdk/C
 # Path to cuda toolkit install
-# CUDA_DIR = /usr/ # for my machines
-CUDA_DIR = /opt/cuda/ # for llebre
+ CUDA_DIR = /usr/ # for my machines
+#CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
-CUDA_GENCODE = arch=compute_13,code=sm_13
+#CUDA_GENCODE = arch=compute_13,code=sm_13
+CUDA_GENCODE = arch=compute_20,code=sm_20
 # nvcc flags (ptxas option verbose is always useful)
-#CUDA_GCC_BINDIR=/opt/gcc-4.4
-CUDA_GCC_BINDIR=/usr/bin
+CUDA_GCC_BINDIR=/opt/gcc-4.4
+#CUDA_GCC_BINDIR=/usr/bin
 NVCCFLAGS = --compiler-options -fno-strict-aliasing,-fpermissive --ptxas-options=-v --compiler-bindir=$$CUDA_GCC_BINDIR --linker-options -rpath=$$MATLAB_PATH/bin/glnxa64
 # include paths
 INCLUDEPATH += $$CUDA_DIR/include/cuda/
@@ -71,7 +85,8 @@ QMAKE_EXTRA_COMPILERS += cuda
 HEADERS += \
     src/slamparams.h \
     src/slamtypes.h \
-    src/rng.h
+    src/rng.h \
+    src/phdfilterwrapper.h
 
 OTHER_FILES += \
     cfg/config.ini

@@ -15,6 +15,8 @@
 #include <stdlib.h>
 
 #define REAL float
+#define PHD_TYPE 0
+#define CPHD_TYPE 1
 
 using namespace std ;
 
@@ -97,6 +99,13 @@ typedef struct{
 } GaussianMixture2D ;
 
 typedef struct{
+	REAL* weights ;
+	REAL* x ;
+	REAL* y ;
+	int n_particles ;
+} ParticleMixture ;
+
+typedef struct{
     REAL x0 ;
     REAL y0 ;
     REAL theta0 ;
@@ -127,6 +136,10 @@ typedef struct{
     int maxFeatures ;
     REAL minFeatureWeight ;
     int particleWeighting ;
+	int daughterMixtureType ;
+	int nDaughterParticles ;
+	int maxCardinality ;
+	int filterType ;
 
     // ackerman steering stuff
     REAL l ;
@@ -141,15 +154,15 @@ typedef struct{
 typedef vector<PoseParticle> ParticleVector ;
 typedef vector<Gaussian2D> gaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
-typedef map<string, REAL> filterConfig ;
 
 class ParticleSLAM{
 public:
     int nParticles ;
-	vector<REAL> weights ;
+	vector<double> weights ;
     vector<ConstantVelocityState> states ;
     vector<gaussianMixture> maps ;
 	vector<char> compatibleZ ;
+	vector< vector<REAL> > cardinalities ;
 
 	ParticleSLAM(unsigned int n = 100)
         :
@@ -157,6 +170,7 @@ public:
           weights(n),
           states(n),
           maps(n),
+		  cardinalities(n),
           compatibleZ()
 	{
 	}
