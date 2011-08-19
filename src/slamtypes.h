@@ -13,10 +13,12 @@
 #include <string>
 #include <algorithm>
 #include <stdlib.h>
+#include <float.h>
 
 #define REAL float
 #define PHD_TYPE 0
 #define CPHD_TYPE 1
+#define LOG0 -FLT_MAX
 
 using namespace std ;
 
@@ -163,6 +165,7 @@ public:
     vector<gaussianMixture> maps ;
 	vector<char> compatibleZ ;
 	vector< vector<REAL> > cardinalities ;
+	vector<REAL> cardinality_birth ;
 
 	ParticleSLAM(unsigned int n = 100)
         :
@@ -181,6 +184,7 @@ public:
         maps = ps.maps ;
         weights = ps.weights ;
         compatibleZ = ps.compatibleZ ;
+		cardinalities = ps.cardinalities ;
 	}
 	ParticleSLAM operator=(const ParticleSLAM ps)
 	{
@@ -189,6 +193,7 @@ public:
         maps = ps.maps ;
         weights = ps.weights ;
         compatibleZ = ps.compatibleZ ;
+		cardinalities = ps.cardinalities ;
         return *this ;
 	}
 };

@@ -41,6 +41,10 @@ using namespace std ;
 //--- Externally defined CUDA kernel callers
 extern "C"
 void
+initCphdConstants() ;
+
+extern "C"
+void
 phdPredict( ParticleSLAM& particles ) ;
 
 extern "C"
@@ -56,7 +60,7 @@ ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_particles_new =
 
 extern "C"
 void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
-		gaussianMixture& expectedMap) ;
+		gaussianMixture& expectedMap, vector<REAL>& cn_estimate ) ;
 
 extern "C"
 void setDeviceConfig( const SlamConfig& config ) ;
@@ -207,7 +211,7 @@ writeParticlesMat(ParticleSLAM particles, int t = -1, const char* filename="part
 }
 
 void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
-                gaussianMixture expectedMap, int t)
+				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
 {
 //        writeParticlesMat(particles,t) ;
 
@@ -225,8 +229,8 @@ void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
 		oss << "state_estimate" << t << ".mat" ;
         std::string expectationFilename = oss.str() ;
 
-		const char* fieldNames[] = {"pose","map","particles"} ;
-		mxArray* mxStates = mxCreateStructMatrix(1,1,3,fieldNames) ;
+		const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
+		mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
 
         // pack data into mxArrays
 
@@ -265,6 +269,13 @@ void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
         mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
         mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
 
+		// estimated cardinality
+		mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
+		for ( int n = 0 ; n <= config.maxCardinality ; n++ )
+		{
+			mxGetPr( mx_cn )[n] = cn_estimate[n] ;
+		}
+
 		// particle poses and weights
 		int n_particles = particles.nParticles ;
 		const char* particle_field_names[] = {"weights","poses"} ;
@@ -289,7 +300,8 @@ void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
         // save the new entry
         mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
         mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
-		mxSetFieldByNumber( mxStates, 0, 2, mx_particles) ;
+		mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
+		mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
 
         // write to the mat-file
         MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
@@ -576,7 +588,11 @@ int main(int argc, char *argv[])
 					particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
 				}
         }
-
+		if ( config.filterType == CPHD_TYPE )
+		{
+			particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
+			particles.cardinality_birth[0] = 0 ;
+		}
         // check cuda device properties
         int nDevices ;
         cudaGetDeviceCount( &nDevices ) ;
@@ -596,17 +612,19 @@ int main(int argc, char *argv[])
         ParticleSLAM particlesPreMerge(particles) ;
         ConstantVelocityState expectedPose ;
         gaussianMixture expectedMap ;
+		vector<REAL> cn_estimate ;
         REAL nEff ;
         timeval start, stop ;
         cout << "STARTING SIMULATION" << endl ;
+		if ( config.filterType == CPHD_TYPE )
+		{
+			DEBUG_MSG("Initializing CPHD constants") ;
+			initCphdConstants() ;
+		}
         for (int n = 0 ; n < nSteps ; n++ )
         {
                 gettimeofday( &start, NULL ) ;
                 cout << "****** Time Step [" << n << "/" << nSteps << "] ******" << endl ;
-//                if ( n == 113 )
-//                        breakUpdate = true ;
-//                else
-//                        breakUpdate = false ;
                 ZZ = allMeasurements[n] ;
 				if (ZPrev.size() > 0 )
 				{
@@ -621,7 +639,7 @@ int main(int argc, char *argv[])
                         particlesPreMerge = phdUpdate(particles, ZZ) ;
 				}
 				cout << "Extracting SLAM state" << endl ;
-				recoverSlamState(particles, expectedPose, expectedMap ) ;
+				recoverSlamState(particles, expectedPose, expectedMap, cn_estimate ) ;
 
 #ifdef DEBUG
 				DEBUG_MSG( "Writing Log" ) ;
@@ -629,7 +647,7 @@ int main(int argc, char *argv[])
 //		writeParticlesMat(particlesPreMerge, n, "particlesPreMerge") ;
 //		writeParticles(particles,"particles",n) ;
 //        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
-		writeLogMat(particles, expectedPose, expectedMap, n) ;
+		writeLogMat(particles, expectedPose, expectedMap, cn_estimate, n) ;
 #endif
 
                 nEff = 0 ;
