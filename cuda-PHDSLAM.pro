@@ -21,6 +21,7 @@ QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissi
 
 # remove qt libs
 CONFIG += dll
+CONFIG += link_prl
 QT     -= gui core
 LIBS   -= -lQtGui -lQtCore
 
@@ -29,17 +30,24 @@ INCLUDEPATH += PicklingTools121Release/C++
 INCLUDEPATH += PicklingTools121Release/C++/opencontainers_1_6_9/include
 #########################################################
 
-### MATLAB external interface ###############################################
-#MATLAB_PATH = /home/cheesinglee/matlab2010a/
-#MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
-MATLAB_PATH = /opt/Matlab # kermit
-QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
-LIBS += -L$$MATLAB_PATH/bin/glnxa64/ -lmx -lmat
-INCLUDEPATH += $$MATLAB_PATH/extern/include
-#############################################################################
+#### MATLAB external interface ###############################################
+##MATLAB_PATH = /home/cheesinglee/matlab2010a/
+##MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
+#MATLAB_PATH = /opt/Matlab # kermit
+#QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
+#QMAKE_LIBDIR += $$MATLAB_PATH/bin/glnxa64/
+#LIBS += -lmx -lmat
+#INCLUDEPATH += $$MATLAB_PATH/extern/include
+##############################################################################
 
 #### Boost libraries ###################################################
 LIBS += -lboost_program_options -lboost_random
+######################################################################
+
+#### FFTW libraries ######################################################
+# needs to be statically linked to avoid conflicts with the MATLAB libs
+LIBS += -lfftw3 -lm
+##########################################################################
 
 CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options
@@ -90,3 +98,5 @@ HEADERS += \
 
 OTHER_FILES += \
     cfg/config.ini
+
+

@@ -142,6 +142,7 @@ typedef struct{
 	int nDaughterParticles ;
 	int maxCardinality ;
 	int filterType ;
+	int distanceMetric ;
 
     // ackerman steering stuff
     REAL l ;
@@ -163,8 +164,8 @@ public:
 	vector<double> weights ;
     vector<ConstantVelocityState> states ;
     vector<gaussianMixture> maps ;
-	vector<char> compatibleZ ;
 	vector< vector<REAL> > cardinalities ;
+	vector<char> compatibleZ ;
 	vector<REAL> cardinality_birth ;
 
 	ParticleSLAM(unsigned int n = 100)
@@ -174,7 +175,8 @@ public:
           states(n),
           maps(n),
 		  cardinalities(n),
-          compatibleZ()
+		  compatibleZ(),
+		  cardinality_birth()
 	{
 	}
 	ParticleSLAM(const ParticleSLAM &ps)

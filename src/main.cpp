@@ -6,9 +6,9 @@
 #include <algorithm>
 #include <sstream>
 
-// matlab output
-#include <mex.h>
-#include <mat.h>
+//// matlab output
+//#include <mex.h>
+//#include <mat.h>
 
 //// pickling tools
 //#include <chooseser.h>
@@ -19,7 +19,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "slamparams.h"
+//#include "slamparams.h"
 #include "slamtypes.h"
 #include <cuda.h>
 #include <cutil_inline.h>
@@ -124,193 +124,193 @@ void printMeasurement(RangeBearingMeasurement z)
     cout << z.range <<"\t\t" << z.bearing << endl ;
 }
 
-void
-writeParticlesMat(ParticleSLAM particles, int t = -1, const char* filename="particles")
-{
-        // create the filename
-        std::string particlesFilename(filename) ;
-        if ( t >= 0 )
-        {
-                char timeStep[8] ;
-                sprintf(timeStep,"%d",t) ;
-                particlesFilename += timeStep ;
-        }
-        particlesFilename += ".mat" ;
+//void
+//writeParticlesMat(ParticleSLAM particles, int t = -1, const char* filename="particles")
+//{
+//        // create the filename
+//        std::string particlesFilename(filename) ;
+//        if ( t >= 0 )
+//        {
+//                char timeStep[8] ;
+//                sprintf(timeStep,"%d",t) ;
+//                particlesFilename += timeStep ;
+//        }
+//        particlesFilename += ".mat" ;
 
-        // load particles into mxArray object
-        mwSize nParticles = particles.nParticles ;
+//        // load particles into mxArray object
+//        mwSize nParticles = particles.nParticles ;
 
-        mxArray* states = mxCreateNumericMatrix(6,nParticles,mxDOUBLE_CLASS,mxREAL) ;
-        double* statesArray = (double*)mxCalloc(nParticles*6,sizeof(double));
-        int i = 0 ;
-        for ( unsigned int p = 0 ; p < nParticles ; p++ )
-        {
-                statesArray[i+0] = particles.states[p].px ;
-                statesArray[i+1] = particles.states[p].py ;
-                statesArray[i+2] = particles.states[p].ptheta ;
-                statesArray[i+3] = particles.states[p].vx ;
-                statesArray[i+4] = particles.states[p].vy ;
-                statesArray[i+5] = particles.states[p].vtheta ;
-                i+=6 ;
-        }
-        mxFree(mxGetPr(states)) ;
-        mxSetPr(states,statesArray) ;
+//        mxArray* states = mxCreateNumericMatrix(6,nParticles,mxDOUBLE_CLASS,mxREAL) ;
+//        double* statesArray = (double*)mxCalloc(nParticles*6,sizeof(double));
+//        int i = 0 ;
+//        for ( unsigned int p = 0 ; p < nParticles ; p++ )
+//        {
+//                statesArray[i+0] = particles.states[p].px ;
+//                statesArray[i+1] = particles.states[p].py ;
+//                statesArray[i+2] = particles.states[p].ptheta ;
+//                statesArray[i+3] = particles.states[p].vx ;
+//                statesArray[i+4] = particles.states[p].vy ;
+//                statesArray[i+5] = particles.states[p].vtheta ;
+//                i+=6 ;
+//        }
+//        mxFree(mxGetPr(states)) ;
+//        mxSetPr(states,statesArray) ;
 
-        mxArray* weights = mxCreateNumericMatrix(nParticles,1,mxDOUBLE_CLASS,mxREAL) ;
-        double* weightsArray = (double*)mxCalloc(nParticles,sizeof(double)) ;
-        std::copy( particles.weights.begin(), particles.weights.end(), weightsArray ) ;
-//        memcpy(weightsArray,particles.weights,nParticles*sizeof(double)) ;
-        mxFree(mxGetPr(weights)) ;
-        mxSetPr(weights,weightsArray) ;
+//        mxArray* weights = mxCreateNumericMatrix(nParticles,1,mxDOUBLE_CLASS,mxREAL) ;
+//        double* weightsArray = (double*)mxCalloc(nParticles,sizeof(double)) ;
+//        std::copy( particles.weights.begin(), particles.weights.end(), weightsArray ) ;
+////        memcpy(weightsArray,particles.weights,nParticles*sizeof(double)) ;
+//        mxFree(mxGetPr(weights)) ;
+//        mxSetPr(weights,weightsArray) ;
 
-        const char* mapFieldNames[] = {"weights","means","covs"} ;
-        mxArray* maps = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
-        mwSize covDims[3] = {2,2,2} ;
-        mxArray* mapWeights ;
-        mxArray* mapMeans ;
-        mxArray* mapCovs ;
-        for ( unsigned int p = 0 ; p < nParticles ; p++ )
-        {
-                gaussianMixture map = particles.maps[p] ;
-                mwSize mapSize = map.size() ;
-                covDims[2] = mapSize ;
-                mapWeights = mxCreateNumericMatrix(1,mapSize,mxDOUBLE_CLASS,mxREAL) ;
-                mapMeans = mxCreateNumericMatrix(2,mapSize,mxDOUBLE_CLASS,mxREAL) ;
-                mapCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
-                if ( mapSize > 0 )
-                {
-                        for ( unsigned int j = 0 ; j < mapSize ; j++ )
-                        {
-                                mxGetPr( mapWeights )[j] = map[j].weight ;
-                                mxGetPr( mapMeans )[2*j+0] = map[j].mean[0] ;
-                                mxGetPr( mapMeans )[2*j+1] = map[j].mean[1] ;
-                                mxGetPr( mapCovs )[4*j+0] = map[j].cov[0] ;
-                                mxGetPr( mapCovs )[4*j+1] = map[j].cov[1] ;
-                                mxGetPr( mapCovs )[4*j+2] = map[j].cov[2] ;
-                                mxGetPr( mapCovs )[4*j+3] = map[j].cov[3] ;
-                        }
-                }
-                mxSetFieldByNumber( maps, p, 0, mapWeights ) ;
-                mxSetFieldByNumber( maps, p, 1, mapMeans ) ;
-                mxSetFieldByNumber( maps, p, 2, mapCovs ) ;
-        }
+//        const char* mapFieldNames[] = {"weights","means","covs"} ;
+//        mxArray* maps = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
+//        mwSize covDims[3] = {2,2,2} ;
+//        mxArray* mapWeights ;
+//        mxArray* mapMeans ;
+//        mxArray* mapCovs ;
+//        for ( unsigned int p = 0 ; p < nParticles ; p++ )
+//        {
+//                gaussianMixture map = particles.maps[p] ;
+//                mwSize mapSize = map.size() ;
+//                covDims[2] = mapSize ;
+//                mapWeights = mxCreateNumericMatrix(1,mapSize,mxDOUBLE_CLASS,mxREAL) ;
+//                mapMeans = mxCreateNumericMatrix(2,mapSize,mxDOUBLE_CLASS,mxREAL) ;
+//                mapCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
+//                if ( mapSize > 0 )
+//                {
+//                        for ( unsigned int j = 0 ; j < mapSize ; j++ )
+//                        {
+//                                mxGetPr( mapWeights )[j] = map[j].weight ;
+//                                mxGetPr( mapMeans )[2*j+0] = map[j].mean[0] ;
+//                                mxGetPr( mapMeans )[2*j+1] = map[j].mean[1] ;
+//                                mxGetPr( mapCovs )[4*j+0] = map[j].cov[0] ;
+//                                mxGetPr( mapCovs )[4*j+1] = map[j].cov[1] ;
+//                                mxGetPr( mapCovs )[4*j+2] = map[j].cov[2] ;
+//                                mxGetPr( mapCovs )[4*j+3] = map[j].cov[3] ;
+//                        }
+//                }
+//                mxSetFieldByNumber( maps, p, 0, mapWeights ) ;
+//                mxSetFieldByNumber( maps, p, 1, mapMeans ) ;
+//                mxSetFieldByNumber( maps, p, 2, mapCovs ) ;
+//        }
 
-        const char* particleFieldNames[] = {"states","weights","maps"} ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,3,particleFieldNames) ;
-        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
-        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
-        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
+//        const char* particleFieldNames[] = {"states","weights","maps"} ;
+//        mxArray* mxParticles = mxCreateStructMatrix(1,1,3,particleFieldNames) ;
+//        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
+//        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
+//        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
 
-        // write to mat file
-        MATFile* matfile = matOpen( particlesFilename.c_str(), "w" ) ;
-        matPutVariable( matfile, "particles", mxParticles ) ;
-        matClose(matfile) ;
+//        // write to mat file
+//        MATFile* matfile = matOpen( particlesFilename.c_str(), "w" ) ;
+//        matPutVariable( matfile, "particles", mxParticles ) ;
+//        matClose(matfile) ;
 
-        // clean up
-        mxDestroyArray( mxParticles ) ;
-}
+//        // clean up
+//        mxDestroyArray( mxParticles ) ;
+//}
 
-void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
-				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
-{
-//        writeParticlesMat(particles,t) ;
+//void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
+//				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
+//{
+////        writeParticlesMat(particles,t) ;
 
-//	fstream zFile("measurements.log", fstream::out|fstream::app ) ;
-//	for ( unsigned int n = 0 ; n < Z.size() ; n++ )
-//	{
-//		zFile << Z[n].range << " " << Z[n].bearing << " ";
-//	}
-//	zFile << endl ;
-//	zFile.close() ;
-//
+////	fstream zFile("measurements.log", fstream::out|fstream::app ) ;
+////	for ( unsigned int n = 0 ; n < Z.size() ; n++ )
+////	{
+////		zFile << Z[n].range << " " << Z[n].bearing << " ";
+////	}
+////	zFile << endl ;
+////	zFile.close() ;
+////
 
-        // create the filename
-        std::ostringstream oss ;
-		oss << "state_estimate" << t << ".mat" ;
-        std::string expectationFilename = oss.str() ;
+//        // create the filename
+//        std::ostringstream oss ;
+//		oss << "state_estimate" << t << ".mat" ;
+//        std::string expectationFilename = oss.str() ;
 
-		const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
-		mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
+//		const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
+//		mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
 
-        // pack data into mxArrays
+//        // pack data into mxArrays
 
-		// estimated pose
-        mxArray* mxPose = mxCreateNumericMatrix(6,1,mxDOUBLE_CLASS,mxREAL) ;
-        mxGetPr( mxPose )[0] = expectedPose.px ;
-        mxGetPr( mxPose )[1] = expectedPose.py ;
-        mxGetPr( mxPose )[2] = expectedPose.ptheta ;
-        mxGetPr( mxPose )[3] = expectedPose.vx ;
-        mxGetPr( mxPose )[4] = expectedPose.vy ;
-        mxGetPr( mxPose )[5] = expectedPose.vtheta ;
+//		// estimated pose
+//        mxArray* mxPose = mxCreateNumericMatrix(6,1,mxDOUBLE_CLASS,mxREAL) ;
+//        mxGetPr( mxPose )[0] = expectedPose.px ;
+//        mxGetPr( mxPose )[1] = expectedPose.py ;
+//        mxGetPr( mxPose )[2] = expectedPose.ptheta ;
+//        mxGetPr( mxPose )[3] = expectedPose.vx ;
+//        mxGetPr( mxPose )[4] = expectedPose.vy ;
+//        mxGetPr( mxPose )[5] = expectedPose.vtheta ;
 
-		// estimated map
-        const char* mapFieldNames[] = {"weights","means","covs"} ;
-        mxArray* mxMap = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
-        int nFeatures = expectedMap.size() ;
-        mwSize covDims[3] = {2,2,2} ;
-        covDims[2] = nFeatures ;
-        mxArray* mxWeights = mxCreateNumericMatrix(1,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* mxMeans = mxCreateNumericMatrix(2,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* mxCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
-        if ( nFeatures > 0 )
-        {
-                for ( int i = 0 ; i < nFeatures ; i++ )
-                {
-                        mxGetPr( mxWeights )[i] = expectedMap[i].weight ;
-                        mxGetPr( mxMeans )[2*i+0] = expectedMap[i].mean[0] ;
-                        mxGetPr( mxMeans )[2*i+1] = expectedMap[i].mean[1] ;
-                        mxGetPr( mxCovs )[4*i+0] = expectedMap[i].cov[0] ;
-                        mxGetPr( mxCovs )[4*i+1] = expectedMap[i].cov[1] ;
-                        mxGetPr( mxCovs )[4*i+2] = expectedMap[i].cov[2] ;
-                        mxGetPr( mxCovs )[4*i+3] = expectedMap[i].cov[3] ;
-                }
-        }
-        mxSetFieldByNumber( mxMap, 0, 0, mxWeights ) ;
-        mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
-        mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
+//		// estimated map
+//        const char* mapFieldNames[] = {"weights","means","covs"} ;
+//        mxArray* mxMap = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
+//        int nFeatures = expectedMap.size() ;
+//        mwSize covDims[3] = {2,2,2} ;
+//        covDims[2] = nFeatures ;
+//        mxArray* mxWeights = mxCreateNumericMatrix(1,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* mxMeans = mxCreateNumericMatrix(2,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* mxCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
+//        if ( nFeatures > 0 )
+//        {
+//                for ( int i = 0 ; i < nFeatures ; i++ )
+//                {
+//                        mxGetPr( mxWeights )[i] = expectedMap[i].weight ;
+//                        mxGetPr( mxMeans )[2*i+0] = expectedMap[i].mean[0] ;
+//                        mxGetPr( mxMeans )[2*i+1] = expectedMap[i].mean[1] ;
+//                        mxGetPr( mxCovs )[4*i+0] = expectedMap[i].cov[0] ;
+//                        mxGetPr( mxCovs )[4*i+1] = expectedMap[i].cov[1] ;
+//                        mxGetPr( mxCovs )[4*i+2] = expectedMap[i].cov[2] ;
+//                        mxGetPr( mxCovs )[4*i+3] = expectedMap[i].cov[3] ;
+//                }
+//        }
+//        mxSetFieldByNumber( mxMap, 0, 0, mxWeights ) ;
+//        mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
+//        mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
 
-		// estimated cardinality
-		mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
-		for ( int n = 0 ; n <= config.maxCardinality ; n++ )
-		{
-			mxGetPr( mx_cn )[n] = cn_estimate[n] ;
-		}
+//		// estimated cardinality
+//		mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
+//		for ( int n = 0 ; n <= config.maxCardinality ; n++ )
+//		{
+//			mxGetPr( mx_cn )[n] = cn_estimate[n] ;
+//		}
 
-		// particle poses and weights
-		int n_particles = particles.nParticles ;
-		const char* particle_field_names[] = {"weights","poses"} ;
-		mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
-		mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-		mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-		for ( int i = 0 ; i < n_particles ; i++ )
-		{
-			mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
-			mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
-			mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
-			mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
-			mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
-			mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
-			mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
-		}
-		mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
-		mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
-//	// resize the array to accommodate the new entry
-//	mxSetM( mxStates, t+1 ) ;
+//		// particle poses and weights
+//		int n_particles = particles.nParticles ;
+//		const char* particle_field_names[] = {"weights","poses"} ;
+//		mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
+//		mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+//		mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+//		for ( int i = 0 ; i < n_particles ; i++ )
+//		{
+//			mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
+//			mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
+//			mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
+//			mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
+//			mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
+//			mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
+//			mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
+//		}
+//		mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
+//		mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
+////	// resize the array to accommodate the new entry
+////	mxSetM( mxStates, t+1 ) ;
 
-        // save the new entry
-        mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
-        mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
-		mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
-		mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
+//        // save the new entry
+//        mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
+//        mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
+//		mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
+//		mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
 
-        // write to the mat-file
-        MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
-        matPutVariable( expectationFile, "expectation", mxStates ) ;
-        matClose( expectationFile ) ;
+//        // write to the mat-file
+//        MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
+//        matPutVariable( expectationFile, "expectation", mxStates ) ;
+//        matClose( expectationFile ) ;
 
-        // clean up
-        mxDestroyArray( mxStates ) ;
-}
+//        // clean up
+//        mxDestroyArray( mxStates ) ;
+//}
 
 void writeParticles(ParticleSLAM particles, const char* filename, int t = -1)
 {
@@ -352,24 +352,18 @@ void writeParticles(ParticleSLAM particles, const char* filename, int t = -1)
         particlesFile.close() ;
 }
 
-void writeLog(ParticleSLAM particles,
-                measurementSet Z, ConstantVelocityState expectedPose,
-                gaussianMixture expectedMap, int t)
+void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
+				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
 {
-        writeParticles(particles,"particles",t) ;
-
-        fstream zFile("measurements.log", fstream::out|fstream::app ) ;
-        for ( unsigned int n = 0 ; n < Z.size() ; n++ )
-        {
-                zFile << Z[n].range << " " << Z[n].bearing << " ";
-        }
-        zFile << endl ;
-        zFile.close() ;
-
-        fstream stateFile("expectation.log", fstream::out|fstream::app ) ;
+		// create the filename
+		std::ostringstream oss ;
+		oss << "state_estimate" << t << ".log" ;
+		std::string filename = oss.str() ;
+		fstream stateFile(filename.c_str(), fstream::out|fstream::app ) ;
         stateFile << expectedPose.px << " " << expectedPose.py << " "
                         << expectedPose.ptheta << " " << expectedPose.vx << " "
-                        << expectedPose.vy << " " << expectedPose.vtheta << " " ;
+						<< expectedPose.vy << " " << expectedPose.vtheta << " "
+						<< endl ;
         for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
         {
                 stateFile << expectedMap[n].weight << " "
@@ -381,6 +375,25 @@ void writeLog(ParticleSLAM particles,
                                 << expectedMap[n].cov[3] << " " ;
         }
         stateFile << endl ;
+
+		// particle weights
+		for ( int n = 0 ; n < particles.nParticles ; n++ )
+		{
+			stateFile << particles.weights[n] << " " ;
+		}
+		stateFile << endl ;
+
+		// particle poses
+		for ( int n = 0 ; n < particles.nParticles ; n++ )
+		{
+			stateFile << particles.states[n].px << " "
+					  << particles.states[n].py << " "
+					  << particles.states[n].ptheta << " "
+					  << particles.states[n].vx << " "
+					  << particles.states[n].vy << " "
+					  << particles.states[n].vtheta << " " ;
+		}
+		stateFile << endl ;
         stateFile.close() ;
 }
 
@@ -479,6 +492,7 @@ void loadConfig(const char* filename)
 			("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
 			("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
 			("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
+			("distance_metric", value<int>(&config.distanceMetric)->default_value(0), "0 = Mahalanobis, 1 = Hellinger")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -497,7 +511,7 @@ void loadConfig(const char* filename)
 //            vm.notify() ;
             // compute clutter density
             config.clutterDensity = config.clutterRate/
-                                    ( pow(config.maxRange,2)*config.maxBearing ) ;
+									( 2*config.maxBearing*config.maxRange ) ;
 //            #ifdef DEBUG
 //            variables_map::iterator it ;
 //            for ( it = vm.begin() ; it != vm.end() ; it++ )
@@ -551,48 +565,6 @@ int main(int argc, char *argv[])
         mkdir(timestamp, S_IRWXU) ;
 #endif
 
-        // load the configuration file
-        if ( argc < 2 )
-        {
-            cout << "missing configuration file argument" << endl ;
-            exit(1) ;
-        }
-        DEBUG_MSG("Loading configuration file") ;
-        loadConfig( argv[1] ) ;
-        setDeviceConfig( config ) ;
-
-        // load measurement data
-        std::vector<measurementSet> allMeasurements ;
-        allMeasurements = loadMeasurements(measurementsFilename) ;
-        std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
-        std::vector<RangeBearingMeasurement>::iterator ii ;
-        int nSteps = allMeasurements.size() ;
-
-//        // initialize the random number generator
-//        if ( !init_sprng(DEFAULT_RNG_TYPE, make_sprng_seed(),SPRNG_DEFAULT ) )
-//                cout << "Error initializing SPRNG" << endl ;
-
-        // initialize particles
-        ParticleSLAM particles( config.nParticles ) ;
-        for (int n = 0 ; n < config.nParticles ; n++ )
-        {
-                particles.states[n].px = INITPX ;
-                particles.states[n].py = INITPY ;
-                particles.states[n].ptheta = INITPTHETA ;
-                particles.states[n].vx = INITVX ;
-                particles.states[n].vy = INITVY ;
-                particles.states[n].vtheta = INITVTHETA ;
-				particles.weights[n] = -log(config.nParticles) ;
-				if ( config.filterType == CPHD_TYPE )
-				{
-					particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
-				}
-        }
-		if ( config.filterType == CPHD_TYPE )
-		{
-			particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
-			particles.cardinality_birth[0] = 0 ;
-		}
         // check cuda device properties
         int nDevices ;
         cudaGetDeviceCount( &nDevices ) ;
@@ -605,6 +577,45 @@ int main(int argc, char *argv[])
         cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
 
 //	cudaPrintfInit() ;
+
+		// load the configuration file
+		if ( argc < 2 )
+		{
+			cout << "missing configuration file argument" << endl ;
+			exit(1) ;
+		}
+		DEBUG_MSG("Loading configuration file") ;
+		loadConfig( argv[1] ) ;
+		setDeviceConfig( config ) ;
+
+		// load measurement data
+		std::vector<measurementSet> allMeasurements ;
+		allMeasurements = loadMeasurements(measurementsFilename) ;
+		std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
+		std::vector<RangeBearingMeasurement>::iterator ii ;
+		int nSteps = allMeasurements.size() ;
+
+		// initialize particles
+		ParticleSLAM particles( config.nParticles ) ;
+		for (int n = 0 ; n < config.nParticles ; n++ )
+		{
+				particles.states[n].px = config.x0 ;
+				particles.states[n].py = config.y0 ;
+				particles.states[n].ptheta = config.theta0 ;
+				particles.states[n].vx = config.vx0 ;
+				particles.states[n].vy = config.vy0 ;
+				particles.states[n].vtheta = config.vtheta0 ;
+				particles.weights[n] = -log(config.nParticles) ;
+				if ( config.filterType == CPHD_TYPE )
+				{
+					particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
+				}
+		}
+		if ( config.filterType == CPHD_TYPE )
+		{
+			particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
+			particles.cardinality_birth[0] = 0 ;
+		}
 
         // do the simulation
         measurementSet ZZ ;
@@ -626,13 +637,13 @@ int main(int argc, char *argv[])
                 gettimeofday( &start, NULL ) ;
                 cout << "****** Time Step [" << n << "/" << nSteps << "] ******" << endl ;
                 ZZ = allMeasurements[n] ;
+				cout << "Performing vehicle prediction" << endl ;
+				phdPredict(particles) ;
 				if (ZPrev.size() > 0 )
 				{
 						cout << "Adding birth terms" << endl ;
 						addBirths(particles,ZPrev) ;
 				}
-				cout << "Performing vehicle prediction" << endl ;
-                phdPredict(particles) ;
                 if ( ZZ.size() > 0 )
                 {
                         cout << "Performing PHD Update" << endl ;
@@ -646,8 +657,8 @@ int main(int argc, char *argv[])
 //		writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
 //		writeParticlesMat(particlesPreMerge, n, "particlesPreMerge") ;
 //		writeParticles(particles,"particles",n) ;
-//        writeLog(particles, ZZ, expectedPose, expectedMap, n) ;
-		writeLogMat(particles, expectedPose, expectedMap, cn_estimate, n) ;
+		writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
+//		writeLogMat(particles, expectedPose, expectedMap, cn_estimate, n) ;
 #endif
 
                 nEff = 0 ;
