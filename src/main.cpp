@@ -45,7 +45,7 @@ initCphdConstants() ;
 
 extern "C"
 void
-phdPredict( ParticleSLAM& particles ) ;
+phdPredict( ParticleSLAM& particles, AckermanControl control = AckermanControl() ) ;
 
 extern "C"
 void
@@ -75,7 +75,32 @@ size_t deviceMemLimit ;
 // measurement datafile
 std::string measurementsFilename ;
 
+// control input datafile
+std::string controls_filename ;
+
 char timestamp[80] ;
+
+vector<AckermanControl> loadControls( string filename )
+{
+    string line ;
+    fstream controls_file( filename.c_str() ) ;
+    vector<AckermanControl> controls ;
+    if ( controls_file.is_open() )
+    {
+        // skip header line
+        getline( controls_file, line ) ;
+        while( controls_file.good() )
+        {
+            getline( controls_file, line ) ;
+            stringstream ss(line, ios_base::in ) ;
+            AckermanControl u ;
+            ss >> u.v_encoder >> u.alpha ;
+            controls.push_back(u) ;
+        }
+    }
+    cout << "Loaded " << controls.size() << " control inputs" << endl ;
+    return controls ;
+}
 
 measurementSet parseMeasurements(string line)
 {
@@ -464,11 +489,10 @@ void loadConfig(const char* filename)
             ("initial_vx", value<REAL>(&config.vx0)->default_value(7), "Initial x velocity")
             ("initial_vy", value<REAL>(&config.vy0)->default_value(0), "Initial y velocity")
             ("initial_vtheta", value<REAL>(&config.vtheta0)->default_value(0.3142), "Initial heading velocity")
+            ("motion_type", value<int>(&config.motionType)->default_value(1), "0 = Constant Velocity, 1 = Ackerman steering")
             ("acc_x", value<REAL>(&config.ax)->default_value(0.5), "Standard deviation of x acceleration")
             ("acc_y", value<REAL>(&config.ay)->default_value(0), "Standard deviation of y acceleration")
             ("acc_theta", value<REAL>(&config.atheta)->default_value(0.0087), "Standard deviation of theta acceleration")
-            ("n_alpha", value<REAL>(&config.n_alpha)->default_value(0.087), "Standard deviation of steering wheel angle noise (Ackerman steering)")
-            ("n_encoder", value<REAL>(&config.n_encoder)->default_value(2), "Standard deviation of wheel encoder noise (Ackerman steering)")
             ("dt", value<REAL>(&config.dt)->default_value(0.1), "Duration of each timestep")
             ("max_bearing", value<REAL>(&config.maxBearing)->default_value(M_PI), "Maximum sensor bearing")
             ("max_range", value<REAL>(&config.maxRange)->default_value(20), "Maximum sensor range")
@@ -489,10 +513,17 @@ void loadConfig(const char* filename)
             ("particle_weighting", value<int>(&config.particleWeighting)->default_value(1), "Particle weighting scheme: 1 = cluster process 2 = Vo's")
 			("daughter_mixture_type", value<int>(&config.daughterMixtureType)->default_value(0), "0: Gaussian, 1: Particle")
 			("n_daughter_particles", value<int>(&config.nDaughterParticles)->default_value(50), "Number of particles to represet each map landmark")
-			("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
 			("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
 			("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
 			("distance_metric", value<int>(&config.distanceMetric)->default_value(0), "0 = Mahalanobis, 1 = Hellinger")
+            ("h", value<REAL>(&config.h)->default_value(0), "Half-axle length")
+            ("l", value<REAL>(&config.l)->default_value(0), "Wheelbase length")
+            ("a", value<REAL>(&config.a)->default_value(0), "x-distance from rear axle to sensor")
+            ("b", value<REAL>(&config.b)->default_value(0), "y-distance from centerline to sensor")
+            ("std_encoder", value<REAL>(&config.stdEncoder)->default_value(0), "Std. deviation of velocity noise")
+            ("std_alpha", value<REAL>(&config.stdAlpha)->default_value(0), "Std. deviation of steering angle noise")
+            ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
+            ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -508,17 +539,9 @@ void loadConfig(const char* filename)
         try{
             store( parse_config_file( ifs, desc ), vm ) ;
 						notify(vm) ;
-//            vm.notify() ;
             // compute clutter density
             config.clutterDensity = config.clutterRate/
 									( 2*config.maxBearing*config.maxRange ) ;
-//            #ifdef DEBUG
-//            variables_map::iterator it ;
-//            for ( it = vm.begin() ; it != vm.end() ; it++ )
-//            {
-//                cout << it->first << " => " << it->second.as<REAL>() << endl ;
-//            }
-//            #endif
         }
         catch( std::exception& e )
         {
@@ -527,31 +550,6 @@ void loadConfig(const char* filename)
         }
     }
 
-//    fstream cfgFile(filename) ;
-//    string line ;
-//    string key ;
-//    REAL val ;
-//    int eqIdx ;
-//    while( cfgFile.good() )
-//    {
-//        getline( cfgFile, line ) ;
-//        eqIdx = line.find("=") ;
-//        if ( eqIdx != string::npos )
-//        {
-//            line.replace(eqIdx,1," ") ;
-//            istringstream iss(line) ;
-//            iss >> key >> val ;
-//            config.insert( pair<string,REAL>(key,val) ) ;
-//        }
-//    }
-//    cfgFile.close() ;
-//#ifdef DEBUG
-//    filterConfig::iterator it ;
-//    for ( it = config.begin() ; it != config.end() ; it++ )
-//    {
-//        cout << it->first << " = " << it->second << endl ;
-//    }
-//#endif
 }
 
 int main(int argc, char *argv[])
@@ -595,6 +593,11 @@ int main(int argc, char *argv[])
 		std::vector<RangeBearingMeasurement>::iterator ii ;
 		int nSteps = allMeasurements.size() ;
 
+        // load control inputs
+        vector<AckermanControl> all_controls ;
+        all_controls = loadControls( controls_filename ) ;
+
+
 		// initialize particles
 		ParticleSLAM particles( config.nParticles ) ;
 		for (int n = 0 ; n < config.nParticles ; n++ )
@@ -637,13 +640,25 @@ int main(int argc, char *argv[])
                 gettimeofday( &start, NULL ) ;
                 cout << "****** Time Step [" << n << "/" << nSteps << "] ******" << endl ;
                 ZZ = allMeasurements[n] ;
-				cout << "Performing vehicle prediction" << endl ;
-				phdPredict(particles) ;
+
+                // no motion for time step 1
+                if ( n > 0 )
+                {
+                    cout << "Performing vehicle prediction" << endl ;
+                    if ( config.motionType == CV_MOTION )
+                        phdPredict(particles) ;
+                    else if ( config.motionType == ACKERMAN_MOTION )
+                        phdPredict( particles, all_controls[n-1] ) ;
+                }
+
+                // need measurements from previous time step for births
 				if (ZPrev.size() > 0 )
 				{
 						cout << "Adding birth terms" << endl ;
 						addBirths(particles,ZPrev) ;
 				}
+
+                // need measurments from current time step for update
                 if ( ZZ.size() > 0 )
                 {
                         cout << "Performing PHD Update" << endl ;

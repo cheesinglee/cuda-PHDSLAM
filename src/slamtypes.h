@@ -15,18 +15,20 @@
 #include <stdlib.h>
 #include <float.h>
 
-#define REAL float
+#define REAL double
 #define PHD_TYPE 0
 #define CPHD_TYPE 1
+#define CV_MOTION 0
+#define ACKERMAN_MOTION 1
 #define LOG0 -FLT_MAX
 
 using namespace std ;
 
-typedef struct {
-	REAL stdx ;
-	REAL stdy ;
-	REAL stdtheta ;
-} ConstantVelocityProcessProps ;
+//typedef struct {
+//	REAL stdx ;
+//	REAL stdy ;
+//	REAL stdtheta ;
+//} ConstantVelocityProcessProps ;
 
 // constant velocity kinematic state
 typedef struct{
@@ -70,20 +72,20 @@ typedef struct{
 	REAL bearing ;
 } RangeBearingMeasurement;
 
-// sensor properties structure
-typedef struct{
-	REAL maxRange ;
-	REAL maxBearing ;
-	REAL stdRange ;
-	REAL stdBearing ;
-	REAL clutterRate ;
-	REAL probDetect ;
-} RangeBearingSensorProps;
+//// sensor properties structure
+//typedef struct{
+//	REAL maxRange ;
+//	REAL maxBearing ;
+//	REAL stdRange ;
+//	REAL stdBearing ;
+//	REAL clutterRate ;
+//	REAL probDetect ;
+//} RangeBearingSensorProps;
 
-typedef struct{
-	ConstantVelocityState state ;
-	REAL weight ;
-} PoseParticle ;
+//typedef struct{
+//	ConstantVelocityState state ;
+//	REAL weight ;
+//} PoseParticle ;
 
 typedef struct {
 	REAL cov[4] ;
@@ -91,34 +93,35 @@ typedef struct {
 	REAL weight ;
 } Gaussian2D;
 
-typedef struct{
-    REAL* cov00 ;
-    REAL* cov01 ;
-    REAL* cov11 ;
-    REAL* mean0 ;
-    REAL* mean1 ;
-    REAL* weight ;
-} GaussianMixture2D ;
+//typedef struct{
+//    REAL* cov00 ;
+//    REAL* cov01 ;
+//    REAL* cov11 ;
+//    REAL* mean0 ;
+//    REAL* mean1 ;
+//    REAL* weight ;
+//} GaussianMixture2D ;
+
+//typedef struct{
+//	REAL* weights ;
+//	REAL* x ;
+//	REAL* y ;
+//	int n_particles ;
+//} ParticleMixture ;
 
 typedef struct{
-	REAL* weights ;
-	REAL* x ;
-	REAL* y ;
-	int n_particles ;
-} ParticleMixture ;
-
-typedef struct{
+    // initial state
     REAL x0 ;
     REAL y0 ;
     REAL theta0 ;
     REAL vx0 ;
     REAL vy0 ;
     REAL vtheta0 ;
+
+    // constant velocity process noise
     REAL ax ;
     REAL ay ;
     REAL atheta ;
-    REAL n_alpha ;
-    REAL n_encoder ;
     REAL dt ;
     REAL maxRange ;
     REAL maxBearing ;
@@ -144,17 +147,18 @@ typedef struct{
 	int filterType ;
 	int distanceMetric ;
 
+    int motionType ;
+
     // ackerman steering stuff
     REAL l ;
     REAL h ;
     REAL a ;
     REAL b ;
-    REAL std_alpha ;
-    REAL std_encoder ;
+    REAL stdAlpha ;
+    REAL stdEncoder ;
 } SlamConfig ;
 
-
-typedef vector<PoseParticle> ParticleVector ;
+//typedef vector<PoseParticle> ParticleVector ;
 typedef vector<Gaussian2D> gaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
 
