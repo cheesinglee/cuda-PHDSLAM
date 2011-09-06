@@ -24,17 +24,6 @@
 
 using namespace std ;
 
-__host__ __device__ REAL
-wrapAngle(REAL a)
-{
-    REAL remainder = fmod(a, REAL(2*M_PI)) ;
-    if ( remainder > M_PI )
-        remainder -= 2*M_PI ;
-    else if ( remainder < -M_PI )
-        remainder += 2*M_PI ;
-    return remainder ;
-}
-
 //typedef struct {
 //	REAL stdx ;
 //	REAL stdy ;
@@ -82,14 +71,6 @@ class RangeBearingMeasurement {
 public:
     REAL range ;
     REAL bearing ;
-
-    RangeBearingMeasurement operator-(RangeBearingMeasurement z)
-    {
-        RangeBearingMeasurement result ;
-        result.range = this->range - z.range ;
-        result.bearing = wrapAngle( this->bearing - z.bearing ) ;
-        return result ;
-    }
 } ;
 
 //// sensor properties structure

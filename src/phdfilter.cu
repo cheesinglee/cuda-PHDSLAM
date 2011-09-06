@@ -108,6 +108,17 @@ REAL* dev_cn_clutter ;
 //ConstantVelocityModelProps modelProps  = {STDX, STDY,STDTHETA} ;
 //ConstantVelocity2DKinematicModel motionModel(modelProps) ;
 
+__host__ __device__ REAL
+wrapAngle(REAL a)
+{
+    REAL remainder = fmod(a, REAL(2*M_PI)) ;
+    if ( remainder > M_PI )
+        remainder -= 2*M_PI ;
+    else if ( remainder < -M_PI )
+        remainder += 2*M_PI ;
+    return remainder ;
+}
+
 __device__ void
 sumByReduction( volatile REAL* sdata, REAL mySum, const unsigned int tid )
 {
@@ -359,9 +370,9 @@ int nextPowerOfTwo(int a)
 
 __device__ void
 computePreUpdateComponents( ConstantVelocityState pose,
-                            Gaussian2D feature, REAL* K[4],
-                            REAL* cov_update[4], REAL* det_sigma,
-                            REAL* S[4], REAL* feature_pd,
+                            Gaussian2D feature, REAL* K,
+                            REAL* cov_update, REAL* det_sigma,
+                            REAL* S, REAL* feature_pd,
                             RangeBearingMeasurement* z_predict )
 {
     // predicted measurement
@@ -405,10 +416,10 @@ computePreUpdateComponents( ConstantVelocityState pose,
 
     *det_sigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
 
-    S[0] = sigma[3]/detSigma ;
-    S[1] = -sigma[1]/detSigma ;
-    S[2] = -sigma[2]/detSigma ;
-    S[3] = sigma[0]/detSigma ;
+    S[0] = sigma[3]/(*det_sigma) ;
+    S[1] = -sigma[1]/(*det_sigma) ;
+    S[2] = -sigma[2]/(*det_sigma) ;
+    S[3] = sigma[0]/(*det_sigma) ;
 
     // Kalman gain
     K[0] = S[0]*(P[0]*J[0] + P[2]*J[2]) + S[1]*(P[0]*J[1] + P[2]*J[3]) ;
@@ -1762,7 +1773,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     {
                         updateIdx = update_offset + (i+1)*n_features + feature_idx ;
                         // compute innovation
-                        innov[0] = z.range - z_predict.r ;
+                        innov[0] = z.range - z_predict.range ;
                         innov[1] = wrapAngle( z.bearing - z_predict.bearing ) ;
                         // compute updated mean
                         meanUpdate[0] = feature.mean[0] + K[0]*innov[0] + K[2]*innov[1] ;
@@ -2245,8 +2256,9 @@ fastSlamUpdateKernel( Gaussian2D* predict_features, ConstantVelocityState* poses
     REAL cov_update[4] ;
     REAL det_sigma ;
     REAL feature_pd ;
+    REAL S_inv[4] ;
     computePreUpdateComponents(pose,feature,K,cov_update,&det_sigma,S_inv,
-                               &feature_pd,z_predict) ;
+                               &feature_pd,&z_predict) ;
 }
 
 ParticleSLAM
