@@ -401,23 +401,39 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
         }
         stateFile << endl ;
 
+        // On time step 0, there is no motion, and therefore no particle
+        // shotgunning. So that every line in the log has the same
+        // number of entries, we repeatedly write the particle info by the
+        // shotgun factor.
+        int times = 1 ;
+        if ( t == 0 )
+        {
+            times = config.nPredictParticles ;
+        }
+
 		// particle weights
-		for ( int n = 0 ; n < particles.nParticles ; n++ )
-		{
-			stateFile << particles.weights[n] << " " ;
-		}
+        for ( int i = 0 ; i < times; i++ )
+        {
+            for ( int n = 0 ; n < particles.nParticles ; n++ )
+            {
+                stateFile << particles.weights[n] << " " ;
+            }
+        }
 		stateFile << endl ;
 
 		// particle poses
-		for ( int n = 0 ; n < particles.nParticles ; n++ )
-		{
-			stateFile << particles.states[n].px << " "
-					  << particles.states[n].py << " "
-					  << particles.states[n].ptheta << " "
-					  << particles.states[n].vx << " "
-					  << particles.states[n].vy << " "
-					  << particles.states[n].vtheta << " " ;
-		}
+        for ( int i = 0 ; i < times ; i++ )
+        {
+            for ( int n = 0 ; n < particles.nParticles ; n++ )
+            {
+                stateFile << particles.states[n].px << " "
+                          << particles.states[n].py << " "
+                          << particles.states[n].ptheta << " "
+                          << particles.states[n].vx << " "
+                          << particles.states[n].vy << " "
+                          << particles.states[n].vtheta << " " ;
+            }
+        }
 		stateFile << endl ;
         stateFile.close() ;
 }
@@ -503,9 +519,12 @@ void loadConfig(const char* filename)
             ("n_particles", value<int>(&config.nParticles)->default_value(512), "Number of vehicle pose particles")
 			("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
             ("resample_threshold", value<REAL>(&config.resampleThresh)->default_value(0.15), "Threshold on normalized nEff for particle resampling")
+            ("subdivide_predict", value<int>(&config.subdividePredict)->default_value(1), "Perform the prediction over several shorter time intervals before the update")
             ("birth_weight", value<REAL>(&config.birthWeight)->default_value(0.05), "Weight of birth features")
 			("birth_noise_factor", value<REAL>(&config.birthNoiseFactor)->default_value(1.5), "Factor which multiplies the measurement noise to determine covariance of birth features")
-            ("gated_births", value<bool>(&config.gatedBirths)->default_value(true), "Enable measurement gating on births")
+            ("gate_births", value<bool>(&config.gateBirths)->default_value(true), "Enable measurement gating on births")
+            ("gate_measurements", value<bool>(&config.gateMeasurements)->default_value(true), "Gate measurements for update")
+            ("gate_threshold", value<REAL>(&config.gateThreshold)->default_value(10), "Mahalanobis distance threshold for gating")
             ("min_expected_feature_weight", value<REAL>(&config.minExpectedFeatureWeight)->default_value(0.33), "Minimum feature weight for expected map")
             ("min_separation", value<REAL>(&config.minSeparation)->default_value(5), "Minimum Mahalanobis separation between features")
             ("max_features", value<int>(&config.maxFeatures)->default_value(100), "Maximum number of features in map")
@@ -539,9 +558,14 @@ void loadConfig(const char* filename)
         try{
             store( parse_config_file( ifs, desc ), vm ) ;
 						notify(vm) ;
-            // compute clutter density
-            config.clutterDensity = config.clutterRate/
-									( 2*config.maxBearing*config.maxRange ) ;
+//            // compute clutter density
+//            config.clutterDensity = config.clutterRate
+//                    /( 2*config.maxBearing*config.maxRange ) ;
+
+            // flawed clutter density calculation based on target space instead
+            // of measurement space
+            REAL fov_area = M_PI*pow(config.maxRange,2) * (config.maxBearing/M_PI) ;
+            config.clutterDensity = config.clutterRate / fov_area ;
         }
         catch( std::exception& e )
         {
@@ -641,22 +665,25 @@ int main(int argc, char *argv[])
                 cout << "****** Time Step [" << n << "/" << nSteps << "] ******" << endl ;
                 ZZ = allMeasurements[n] ;
 
+                // need measurements from previous time step for births
+                if (ZPrev.size() > 0 )
+                {
+                        cout << "Adding birth terms" << endl ;
+                        addBirths(particles,ZPrev) ;
+                }
+
                 // no motion for time step 1
                 if ( n > 0 )
                 {
                     cout << "Performing vehicle prediction" << endl ;
-                    if ( config.motionType == CV_MOTION )
-                        phdPredict(particles) ;
-                    else if ( config.motionType == ACKERMAN_MOTION )
-                        phdPredict( particles, all_controls[n-1] ) ;
+                    for ( int i = 0 ; i < config.subdividePredict ; i++ )
+                    {
+                        if ( config.motionType == CV_MOTION )
+                            phdPredict(particles) ;
+                        else if ( config.motionType == ACKERMAN_MOTION )
+                            phdPredict( particles, all_controls[n-1] ) ;
+                    }
                 }
-
-                // need measurements from previous time step for births
-				if (ZPrev.size() > 0 )
-				{
-						cout << "Adding birth terms" << endl ;
-						addBirths(particles,ZPrev) ;
-				}
 
                 // need measurments from current time step for update
                 if ( ZZ.size() > 0 )
@@ -681,11 +708,11 @@ int main(int argc, char *argv[])
 						nEff += exp(2*particles.weights[i]) ;
 				nEff = 1.0/nEff/particles.nParticles ;
                 DEBUG_VAL(nEff) ;
-//				if (nEff <= config.resampleThresh )
-//				{
+                if (nEff <= config.resampleThresh )
+                {
 					DEBUG_MSG("Resampling particles") ;
 					particles = resampleParticles(particles,config.nParticles) ;
-//				}
+                }
                 ZPrev = ZZ ;
                 gettimeofday( &stop, NULL ) ;
                 double elapsed = (stop.tv_sec - start.tv_sec)*1000 ;

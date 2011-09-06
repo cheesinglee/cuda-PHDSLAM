@@ -88,10 +88,11 @@ for i = 1:nSteps
         expectedMeans{i} = map_means ;
         expectedCovs{i} = map_covs ;
         expectedWeights{i} = map_weights ;
+        fclose(fid) ;
     end
 end
 
-% %% recompute expected map from individual particles
+% %% recompute expected map from individual particles 
 % disp 'Computing expected maps...'
 % minWeight = 1e-5 ;
 % minSeparation = 10 ;
@@ -107,7 +108,7 @@ end
 
 
 %% plot
-% avi = avifile('clusterphdslam.avi') ;
+avi = avifile('vo_1feature.avi') ;
 min_weight = 0.33 ;
 figure(1)
 set(gcf,'Position',[100,100,1280,720]) ;
@@ -126,7 +127,10 @@ for i = 1:nSteps-1
     mapCovs = expectedCovs{i} ;
     nFeatures = size(mapMeans,2) ;
     weight_idx = mapWeights > min_weight ;
-    pp = makeCovEllipses( mapMeans(:,weight_idx), mapCovs(:,:,weight_idx), N ) ;
+    weight_sum = sum(mapWeights) ;
+    [sorted, idx] = sort(mapWeights,'descend') ;
+    idx = idx(1:round(weight_sum)) ;
+    pp = makeCovEllipses( mapMeans(:,idx), mapCovs(:,:,idx), N ) ;
 %     ppGold = makeCovEllipses( expectedMapsGold(i).means, expectedMapsGold(i).covs,N ) ;
     clf 
     subplot(2,4,[1,2,5,6])
@@ -142,7 +146,7 @@ for i = 1:nSteps-1
     title(num2str(i))
 %     xlim([-10 60])
 %     ylim([-10 60])
-    axis square
+    axis equal
     grid on
     subplot(2,4,3)
     hold on
@@ -151,7 +155,7 @@ for i = 1:nSteps-1
     for j = 1:64
         plot(poses(1,(color_idx==j)),poses(2,(color_idx==j)),'.','Color',cmap(j,:),'MarkerSize',8) ;
     end
-    plot(trajTrue(1,i+1),trajTrue(2,i+1),'pk','MarkerSize',12)
+    plot(trajTrue(1,i),trajTrue(2,i),'pk','MarkerSize',12)
     xrange = max(poses(1,:)) - min(poses(1,:)) ;
     yrange = max(poses(2,:)) - min(poses(2,:)) ;
     if yrange == 0
@@ -160,7 +164,7 @@ for i = 1:nSteps-1
     if xrange == 0 
         xrange = 0.1 ;
     end
-    axis square 
+    axis equal 
     grid on
     title('Particle Weights') 
     subplot(2,4,4)
@@ -172,7 +176,7 @@ for i = 1:nSteps-1
     plot(0:numel(cn)-1,cn,'.') ;
     ylim([0,1]) ;
     drawnow
-%     avi = addframe( avi,getframe(gcf) ) ;
+    avi = addframe( avi,getframe(gcf) ) ;
 %     subplot(1,3,3)
 %     hold on
 %     plot(ppGold(1,:),ppGold(2,:),'b')
@@ -186,6 +190,6 @@ for i = 1:nSteps-1
 %     ylim([-10 60])
 %     axis square
 %     drawnow 
-    pause(0.05) ;
+    pause(0.02) ;
 end
-% avi = close(avi) ;
+avi = close(avi) ;

@@ -24,6 +24,17 @@
 
 using namespace std ;
 
+__host__ __device__ REAL
+wrapAngle(REAL a)
+{
+    REAL remainder = fmod(a, REAL(2*M_PI)) ;
+    if ( remainder > M_PI )
+        remainder -= 2*M_PI ;
+    else if ( remainder < -M_PI )
+        remainder += 2*M_PI ;
+    return remainder ;
+}
+
 //typedef struct {
 //	REAL stdx ;
 //	REAL stdy ;
@@ -66,11 +77,20 @@ typedef struct{
     REAL n_encoder ;
 } AckermanNoise;
 
-// measurement structure
-typedef struct{
-	REAL range ;
-	REAL bearing ;
-} RangeBearingMeasurement;
+// measurement type
+class RangeBearingMeasurement {
+public:
+    REAL range ;
+    REAL bearing ;
+
+    RangeBearingMeasurement operator-(RangeBearingMeasurement z)
+    {
+        RangeBearingMeasurement result ;
+        result.range = this->range - z.range ;
+        result.bearing = wrapAngle( this->bearing - z.bearing ) ;
+        return result ;
+    }
+} ;
 
 //// sensor properties structure
 //typedef struct{
@@ -130,12 +150,16 @@ typedef struct{
     REAL clutterRate ;
     REAL clutterDensity ;
     REAL pd ;
+
     int nParticles ;
 	int nPredictParticles ;
+    int subdividePredict ;
     REAL resampleThresh ;
     REAL birthWeight ;
 	REAL birthNoiseFactor ;
-    bool gatedBirths ;
+    bool gateBirths ;
+    bool gateMeasurements ;
+    REAL gateThreshold ;
     REAL minExpectedFeatureWeight ;
     REAL minSeparation ;
     int maxFeatures ;

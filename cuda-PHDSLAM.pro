@@ -7,10 +7,13 @@
 SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
-    src/phdfilterwrapper.cpp
+    src/phdfilterwrapper.cpp \
+    src/fastslam.cu
 # Cuda sources
-SOURCES -= src/phdfilter.cu
-CUDA_SOURCES += src/phdfilter.cu
+SOURCES -= src/phdfilter.cu \
+         src/fastslam.cu
+CUDA_SOURCES += src/phdfilter.cu \
+            src/fastslam.cu
 # Project dir and outputs
 PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
@@ -97,6 +100,4 @@ HEADERS += \
     src/phdfilterwrapper.h
 
 OTHER_FILES += \
-    cfg/config.ini
-
-
+    cfg/config.cfg

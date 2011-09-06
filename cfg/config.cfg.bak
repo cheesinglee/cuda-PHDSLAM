@@ -44,21 +44,16 @@
 #                                         Path to measurements datafile
 
 motion_type = 1
-#initial_x = 0
-#initial_y = -15
-#initial_theta = 0
-#initial_vx = 0.2
-#initial_vy = 0
-#initial_vtheta =  0
 
 initial_x = 0
-initial_y = -15
+initial_y = 0
 initial_theta = 0
-initial_vx = 5
+initial_vx = 2
 initial_vy = 0
-initial_vtheta =  0.2967
+initial_vtheta =  0.2
 
-#dt = 1
+
+dt = 0.02
 
 # constant velocity motion params
 #acc_x = 0.005
@@ -66,8 +61,7 @@ initial_vtheta =  0.2967
 #acc_theta = 0.0017
 acc_x = 0.5
 acc_y = 0.5
-acc_theta = 0.0122
-dt = 0.1
+acc_theta = 0.087
 
 
 # ackerman steering stuff
@@ -76,12 +70,12 @@ h = 0.76
 a = 3.78
 b = 0.5
 std_encoder = 2
-std_alpha = 0.0873
+std_alpha =      0.0873
 
 # range bearing measurement params
 max_range = 10
 max_bearing = 3.1415926535897931
-std_range = 1
+std_range = 1.0
 std_bearing = 0.0349
 clutter_rate = 20
 pd = 0.95
@@ -90,20 +84,21 @@ pd = 0.95
 filter_type = 0
 particle_weighting = 0
 distance_metric = 1
-n_particles = 256
-resample_threshold = 0.15
+n_particles = 64
+subdivide_predict = 1
+resample_threshold = 1
 birth_weight = 0.005
 birth_noise_factor = 1
-gated_births = 0
+gate_births = 0
+gate_measurements = 1
+gate_threshold = 10
 min_expected_feature_weight = 0.0
 min_separation = 0.5
 max_features = 100
 min_feature_weight=0.00001
-n_predict_particles = 1
+n_predict_particles = 4
 n_daughter_particles = 50
-#measurements_filename = /home/cheesinglee/workspace/cuda-PHDSLAM/data/measurements_synth_ackerman.txt
-measurements_filename = /home/cheesinglee/workspace/cuda-PHDSLAM/data/measurements_synth2.txt
-
-controls_filename = /home/cheesinglee/workspace/cuda-PHDSLAM/data/controls_synth.txt
+measurements_filename = /home/cheesinglee/workspace/cuda-PHDSLAM/data/ackerman3/measurements_synth.txt
+controls_filename = /home/cheesinglee/workspace/cuda-PHDSLAM/data/ackerman3/controls_synth.txt
 max_cardinality = 255
 

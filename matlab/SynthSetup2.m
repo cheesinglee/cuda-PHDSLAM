@@ -4,32 +4,32 @@ global figWidth figHeight
 % addpath('../slamtools')
 
 % simulation data file
-simDataFilename = 'simData2.mat' ;
+simDataFilename = 'simData2_ackerman3.mat' ;
 regenSimData = true ;
 loadMeasurementsFromText = false ;
 
 chi2 = chi2inv(0.99,1:1000);
-nSteps = 1000;         % number of simulation steps
+nSteps = 500;         % number of simulation steps
 % time units between each step
-dt = 1 ;
+dt = .02 ;
 DrawEveryNFrames =1e0;   % how often shall we draw?
-animationDelay = 0.05 ; % delay between frames
+animationDelay = 0.01 ; % delay between frames
 pause off % delay on or off
 saveAvi = true ;
 figWidth = 800 ; 
 figHeight = 600 ;
 maxLmapSize = 20;       % maximum number of features in local submaps
 
-motion_type = 0 ;
+motion_type = 1 ;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Model parameters
+%% Model parameters
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Sensor model
 SensorSettings.FieldOfView = 180;       % in degrees (-degrees < 0 < +degrees)
-SensorSettings.Range = 10;              % in meters
+SensorSettings.Range = 10 ;              % in meters
 SensorSettings.Rng_noise = 1.0 ;%1.5;         % in meters (std deviation) 1.5
-SensorSettings.Brg_noise = deg2rad(2.0) ;%deg2rad(4.0);           % in degrees (std deviation) 1.0
+SensorSettings.Brg_noise = 0.0349 ; % 2 degrees           % in degrees (std deviation) 1.0
 SensorSettings.clutterRate = 20 ; % mean number of clutter measurements per scan
 SensorSettings.Pd = 0.95 ;
 R = diag([SensorSettings.Rng_noise; SensorSettings.Brg_noise]).^2;
@@ -39,13 +39,13 @@ measurementModel = RangeBearingMeasurementModel2(SensorSettings);
 % simulation inputs
 StdOdometryNoise=[.1; .1; deg2rad(1)];    % in metres & degrees
 
-initial_state = [0,-15,0,0.2,0,0]' ;
+initial_state = [0,0,0,2,0,0.2]' ;
 
 if motion_type == 0
     % CV motion model process noise (acceleration)
-    StdAccNoiseX=0.005;                                        % X axis acceleration noise. No sideslip.
-    StdAccNoiseY= 0.005;                                         % Y axis acceleration noise
-    StdAccNoiseYaw = deg2rad(0.1) ;
+    StdAccNoiseX=0.5;                                        % X axis acceleration noise. No sideslip.
+    StdAccNoiseY= 0.5;                                         % Y axis acceleration noise
+    StdAccNoiseYaw = deg2rad(0.5) ;
     StdAccNoise=[StdAccNoiseX; StdAccNoiseY; StdAccNoiseYaw] ;
     Q = diag(StdAccNoise).^2;
     % modeling parameters
@@ -56,14 +56,15 @@ elseif motion_type == 1
     vehicleParams.h = 0.76;
     vehicleParams.a = 3.78;
     vehicleParams.b = 1.21-1.42/2; 
-    sigmaVel = 2; %2
-    sigmaSteer = deg2rad(5); %10
+    sigmaVel = 2; 
+    sigmaSteer =     0.0873; %5 degrees
     Q = diag([sigmaVel,sigmaSteer]).^2;
     motion_model = AckermanMotionModel(vehicleParams,Q);
+    initial_state = initial_state(1:3) ;
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Static Map definition
+%% Static Map definition
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 mapArea = [[-20,-20];[20,20]] ;
 mapRange = diff(mapArea) ;
@@ -73,7 +74,7 @@ mapRange = diff(mapArea) ;
 % staticMap = [mapx(:)' ; mapy(:)']+10;
 
 % random map
-nFeatures = 50 ;
+nFeatures = 80 ;
 staticMap = [   rand(1,nFeatures)*mapRange(1)+mapArea(1,1) ; 
                 rand(1,nFeatures)*mapRange(2)+mapArea(1,2) ] ;
 
@@ -82,29 +83,36 @@ dists = sum(staticMap.^2) ;
 [aaa,idx] = sort(dists,'ascend') ;
 staticMap = staticMap(:,idx) ;
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Vehicle trajectory
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if motion_type == 0
+    traj = generateCVTrajectory(initial_state,Q,nSteps,dt) ;
+    control_true = zeros(2,nSteps) ;
+    control_noisy = control_true ;
+elseif motion_type == 1
+    [traj,control_true] = generateAckermanTrajectory(initial_state, motion_model, staticMap, dt ) ;
+    control_noisy = control_true ;
+    for k = 1:numel(control_true) 
+        control_noisy(k).u(1) = control_true(k).u(1) + sigmaVel*randn() ;
+        control_noisy(k).u(2) = wrapAngle(control_true(k).u(2) + sigmaSteer*randn() ) ;
+    end
+end
+nSteps = size(traj,2) ;
+control_tmp.u = [0;0] ;
+control_tmp.dt = 10*dt ;
+W = motion_model.computeControlJacobian(initial_state,control_tmp) ;
+initialCovariance = W*Q*W' ;
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% make dynamic features
+%% make dynamic features
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 dynamicFeatures = cell(1,nSteps) ;
 % dfTraj = generateCircleTrajectory(staticMap, nSteps,2) ;
 % dynamicFeatures = generateDynamicFeatures(1, nSteps, dfTraj ) ;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Vehicle trajectory
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-if motion_type == 0
-    traj = generateCVTrajectory(initial_state,Q,nSteps,dt) ;
-    control = zeros(2,nSteps) ;
-elseif motion_type == 1
-    [traj,control] = generateAckermanTrajectory(initial_state, motion_model, staticMap ) ;
-end
-nSteps = size(traj,2) ;
-control_tmp.dt = 10*dt ;
-W = motion_model.computeControlJacobian(initial_state,control_tmp) ;
-initialCovariance = W*Q*W' ;
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% load or generate simulation data
+%% load or generate simulation data
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sim_map = staticMap ;
 if (~exist(simDataFilename,'file') || regenSimData)
@@ -117,7 +125,8 @@ else
 end
 disp('Generating simulation inputs...')
 sim = generateSimData(sim_map,dynamicFeatures,traj,measurementModel,StdOdometryNoise,simDataFilename) ;
-sim.control = control ;
+sim.control_true = control_true ;
+sim.control_noisy = control_noisy ;
 if(loadMeasurementsFromText)
     disp('Loading measurements from text file...')
     fid = fopen('measurements.txt') ;
@@ -132,27 +141,40 @@ end
 disp( 'Exporting measurements...')
 generateMeasurementTextFile(simDataFilename) ;
 save(simDataFilename,'sim') ;
+if (motion_type==1)
+    disp('Exporting control inputs...')
+    generateControlsTextFile(simDataFilename) ;
+end
 disp('Done!')
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% preview the trajectory and map
+%% preview the trajectory and map
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 figure(77)
 clf
-plot(traj(1,:),traj(2,:))
+plot(sim.traj(1,:),sim.traj(2,:))
 hold on
 plot(staticMap(1,:),staticMap(2,:),'k*')
+% plot dead reckoning trajectory
+if motion_type==1
+    traj_noisy = zeros(3,nSteps) ;
+    traj_noisy(:,1) = traj(:,1) ;
+    for k = 2:nSteps
+        traj_noisy(:,k) = motion_model.computeMotion( traj_noisy(:,k-1), sim.control_noisy(:,k-1) ) ;
+    end
+    plot(traj_noisy(1,:),traj_noisy(2,:),'r')
+end
 grid on
 axis equal
 title 'Preview'
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Specify data association
+%% Specify data association
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 dataAssociation = JcbbDataAssociation;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% specify the SLAM algorithm
+%% specify the SLAM algorithm
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 slam = {} ;
 % EKF SLAM
@@ -178,8 +200,8 @@ slam = {} ;
 slam = [slam {RbCphdSlam(motion_model,measurementModel,'InitialPosition',initial_state,'InitialCovariance',initialCovariance,'nParticles',100,'resampleThreshold' ,0.8,'InflateNoise',1,'WeightScheme','cluster')}] ;
 % slam = [slam {RbCphdSlam(motionModel,measurementModel,'InitialPosition',traj(1:3,1),'nParticles',50,'resampleThreshold' ,0.8,'InflateNoise',1,'WeightScheme','emptymap')}] ;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%5
-% Initialize log
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Initialize log
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 log.time = zeros(1,nSteps) ;
 log.nFeatures = zeros(1,nSteps) ;
@@ -201,8 +223,8 @@ log.simData = [] ;
 log = repmat(log,1,length(slam)) ;
 
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%55
-% Prepare avi files
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Prepare avi files
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 avidir = '/home/cheesinglee/matlab_work/experiments/' ;
 if (saveAvi)
