@@ -29,6 +29,7 @@ controls = file.root.controls[:].transpose()
 n_runs = 50 
 
 for n in xrange(n_runs):
+    print(n)
     # make the noisy control inputs
     n_controls = size(controls,1)
     encoder_noise = random.randn(n_controls)*motion_params['std_encoder']
