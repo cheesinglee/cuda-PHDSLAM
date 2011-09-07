@@ -6,3 +6,10 @@
 2012*
 *.log
 
+# binaries
+bin/*
+Obj/*
+
+# simulation data
+data/*
+

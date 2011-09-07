@@ -48,12 +48,14 @@ for n in xrange(n_runs):
     os.mkdir(str(n))    
     dir_str = str(n)+os.sep 
     controls_file = open(dir_str+'controls_synth.txt','w')
+    controls_file.write('% velocity\tsteering angle\n')
     for i in xrange(n_controls):
-        control_str = '{u[0]}, {u[1]}\n'.format(u=controls_noisy[:,i])
+        control_str = '{u[0]} {u[1]}\n'.format(u=controls_noisy[:,i])
         controls_file.write(control_str)
     controls_file.close()
     
     measurements_file = open(dir_str+'measurements_synth.txt','w')
+    measurements_file.write('% measurements from simulation data. One time step per line, each pair of of numbers is a range/bearing measurement.\n')
     for i in xrange(n_steps):
         Z = measurements[i] ;
         n_z = size(Z,1)
