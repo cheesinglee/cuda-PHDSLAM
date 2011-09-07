@@ -558,14 +558,14 @@ void loadConfig(const char* filename)
         try{
             store( parse_config_file( ifs, desc ), vm ) ;
 						notify(vm) ;
-//            // compute clutter density
-//            config.clutterDensity = config.clutterRate
-//                    /( 2*config.maxBearing*config.maxRange ) ;
+            // compute clutter density
+            config.clutterDensity = config.clutterRate
+                    /( 2*config.maxBearing*config.maxRange ) ;
 
-            // flawed clutter density calculation based on target space instead
-            // of measurement space
-            REAL fov_area = M_PI*pow(config.maxRange,2) * (config.maxBearing/M_PI) ;
-            config.clutterDensity = config.clutterRate / fov_area ;
+//            // flawed clutter density calculation based on target space instead
+//            // of measurement space
+//            REAL fov_area = M_PI*pow(config.maxRange,2) * (config.maxBearing/M_PI) ;
+//            config.clutterDensity = config.clutterRate / fov_area ;
         }
         catch( std::exception& e )
         {

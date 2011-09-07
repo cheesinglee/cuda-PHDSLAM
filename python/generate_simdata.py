@@ -21,13 +21,16 @@ sensor_params = {
     'pd':0.95,
     'clutter_rate':20}
 
+print('loading mat-file...')
 file = tables.openFile('groundtruth.mat')
 landmarks = file.root.staticMap[:].transpose()
 trajectory = file.root.traj[:].transpose()
 controls = file.root.controls[:].transpose()
+file.close()
 
-n_runs = 50 
+n_runs = 10 
 
+print('generating simulation inputs...')
 for n in xrange(n_runs):
     print(n)
     # make the noisy control inputs

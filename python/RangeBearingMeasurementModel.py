@@ -24,7 +24,7 @@ class RangeBearingMeasurementModel:
         dy = feature[1,:] - pose[1]
         range2 = dx**2 + dy**2
         range = sqrt(range2)
-        bearing = wrap_angle( arctan2(dy,dx) )
+        bearing = wrap_angle( arctan2(dy,dx) ) - pose[2]
         z = vstack((range,bearing))
         in_range = logical_and( (range <= self.params['max_range']), 
                                 (abs(bearing) <= self.params['max_bearing']) )
