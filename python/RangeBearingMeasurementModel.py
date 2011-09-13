@@ -54,6 +54,15 @@ class RangeBearingMeasurementModel:
         z_clutter = vstack((range_clutter,bearing_clutter))
         return hstack((z_noisy,z_clutter))
         
+    def check_in_range(self,pose,feature):
+        dx = feature[0,:] - pose[0] 
+        dy = feature[1,:] - pose[1]
+        range2 = dx**2 + dy**2
+        range = sqrt(range2)
+        bearing = wrap_angle( arctan2(dy,dx) ) - pose[2]
+        in_range = logical_and( (range <= self.params['max_range']), 
+                                (abs(bearing) <= self.params['max_bearing']) ) 
+        return in_range
         
         
         

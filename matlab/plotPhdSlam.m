@@ -1,3 +1,4 @@
+clear classes
 close all
 pause on
 path = uigetdir('./','Choose logs directory') ;
@@ -6,7 +7,10 @@ if ( path == 0 )
 end
 
 [fname,pname] = uigetfile('*.mat','Choose simulation data file') ;
-simdata_filename = [pname,filesep,fname] ;
+if ( fname ~= 0 )
+    simdata_filename = [pname,filesep,fname] ;
+    load(simdata_filename)
+end
 
 %% parse logs
 t = 0 ;
@@ -92,30 +96,17 @@ for i = 1:nSteps
     end
 end
 
-% %% recompute expected map from individual particles 
-% disp 'Computing expected maps...'
-% minWeight = 1e-5 ;
-% minSeparation = 10 ;
-% maxGaussians = 100 ;
-% minExpectedWeight = 0.33 ;
-% expectedMapsGold = struct('weights',[],'means',[],'covs',[]) ;
-% expectedMapsGold = repmat(expectedMapsGold,1,nSteps) ;
-% for i = 1:nSteps
-%     expectedMapsGold(i) = computeExpectedMap( {particleMaps{i,:}}, ...
-%         particleWeights(i,:), minWeight, minSeparation, maxGaussians,...
-%         minExpectedWeight ) ;
-% end
-
-
 %% plot
-avi = avifile('vo_1feature.avi') ;
+% avi = avifile('1cluster.avi') ;
 min_weight = 0.33 ;
 figure(1)
 set(gcf,'Position',[100,100,1280,720]) ;
-load(simdata_filename)
-trajTrue = sim.traj ;
 N = 10 ;
+draw_rate = 10 ;
 for i = 1:nSteps-1
+    if mod(i,draw_rate) ~= 0
+        continue
+    end
     set(0,'CurrentFigure',1) ;
     weights = exp(particleWeights(i,:)) ;
     poses = squeeze(particlePoses(i,:,:))' ;
@@ -141,8 +132,10 @@ for i = 1:nSteps-1
     plot(expectedTraj(1,i),expectedTraj(2,i),'dr','Markersize',8) ;
     plot( expectedTraj(1,1:i), expectedTraj(2,1:i), 'r--' ) ;
     plot(poses(1,:),poses(2,:),'.') ;
-    plot( trajTrue(1,:), trajTrue(2,:), 'k' )
-    plot( sim.groundTruth{i}.loc(1,:), sim.groundTruth{i}.loc(2,:),'k*')
+    if (exist('sim','var'))
+        plot( sim.traj(1,:), sim.traj(2,:), 'k' )
+        plot( sim.groundTruth{i}.loc(1,:), sim.groundTruth{i}.loc(2,:),'k*')
+    end
     title(num2str(i))
 %     xlim([-10 60])
 %     ylim([-10 60])
@@ -155,7 +148,9 @@ for i = 1:nSteps-1
     for j = 1:64
         plot(poses(1,(color_idx==j)),poses(2,(color_idx==j)),'.','Color',cmap(j,:),'MarkerSize',8) ;
     end
-    plot(trajTrue(1,i),trajTrue(2,i),'pk','MarkerSize',12)
+    if ( exist('sim','var') )
+        plot(sim.traj(1,i),sim.traj(2,i),'pk','MarkerSize',12)
+    end
     xrange = max(poses(1,:)) - min(poses(1,:)) ;
     yrange = max(poses(2,:)) - min(poses(2,:)) ;
     if yrange == 0
@@ -176,7 +171,7 @@ for i = 1:nSteps-1
     plot(0:numel(cn)-1,cn,'.') ;
     ylim([0,1]) ;
     drawnow
-    avi = addframe( avi,getframe(gcf) ) ;
+%     avi = addframe( avi,getframe(gcf) ) ;
 %     subplot(1,3,3)
 %     hold on
 %     plot(ppGold(1,:),ppGold(2,:),'b')
@@ -190,6 +185,6 @@ for i = 1:nSteps-1
 %     ylim([-10 60])
 %     axis square
 %     drawnow 
-    pause(0.02) ;
+%     pause(0.05) ;
 end
-avi = close(avi) ;
+% avi = close(avi) ;

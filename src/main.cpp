@@ -78,7 +78,33 @@ std::string measurementsFilename ;
 // control input datafile
 std::string controls_filename ;
 
+// measurement and control timestamp datafiles
+std::string measurements_time_filename ;
+std::string controls_time_filename ;
+
 char timestamp[80] ;
+
+vector<REAL> loadTimestamps( string filename )
+{
+    fstream file( filename.c_str() ) ;
+    vector<REAL> times ;
+    times.clear();
+    if ( file.is_open() )
+    {
+        while( file.good() )
+        {
+            string line ;
+            getline(file,line) ;
+            stringstream ss(line, ios_base::in ) ;
+            REAL val ;
+            ss >> val ;
+            times.push_back( val ) ;
+        }
+        times.pop_back();
+    }
+    cout << "loaded " << times.size() << " time stamps" << endl ;
+    return times ;
+}
 
 vector<AckermanControl> loadControls( string filename )
 {
@@ -138,6 +164,7 @@ std::vector<measurementSet> loadMeasurements( std::string filename )
             allMeasurements.push_back( parseMeasurements(line) ) ;
         }
         allMeasurements.pop_back() ;
+        cout << "Loaded " << allMeasurements.size() << " measurements" << endl ;
     }
     else
         cout << "could not open measurements file!" << endl ;
@@ -543,6 +570,8 @@ void loadConfig(const char* filename)
             ("std_alpha", value<REAL>(&config.stdAlpha)->default_value(0), "Std. deviation of steering angle noise")
             ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
             ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
+            ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
+            ("controls_time_filename", value<std::string>(&controls_time_filename)->default_value(""), "Path to control timestamps datafile")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -600,49 +629,75 @@ int main(int argc, char *argv[])
 
 //	cudaPrintfInit() ;
 
-		// load the configuration file
-		if ( argc < 2 )
-		{
-			cout << "missing configuration file argument" << endl ;
-			exit(1) ;
-		}
-		DEBUG_MSG("Loading configuration file") ;
-		loadConfig( argv[1] ) ;
-		setDeviceConfig( config ) ;
+        // load the configuration file
+        if ( argc < 2 )
+        {
+            cout << "missing configuration file argument" << endl ;
+            exit(1) ;
+        }
+        DEBUG_MSG("Loading configuration file") ;
+        loadConfig( argv[1] ) ;
+        setDeviceConfig( config ) ;
 
-		// load measurement data
-		std::vector<measurementSet> allMeasurements ;
-		allMeasurements = loadMeasurements(measurementsFilename) ;
-		std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
-		std::vector<RangeBearingMeasurement>::iterator ii ;
-		int nSteps = allMeasurements.size() ;
+        // load measurement data
+        std::vector<measurementSet> allMeasurements ;
+        allMeasurements = loadMeasurements(measurementsFilename) ;
+        std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
+        std::vector<RangeBearingMeasurement>::iterator ii ;
 
         // load control inputs
         vector<AckermanControl> all_controls ;
         all_controls = loadControls( controls_filename ) ;
 
+        // load timestamps
+        vector<REAL> measurement_times = loadTimestamps( measurements_time_filename ) ;
+        vector<REAL> control_times = loadTimestamps( controls_time_filename ) ;
+        bool has_timestamps = (measurement_times.size() > 0) ;
 
-		// initialize particles
-		ParticleSLAM particles( config.nParticles ) ;
-		for (int n = 0 ; n < config.nParticles ; n++ )
-		{
-				particles.states[n].px = config.x0 ;
-				particles.states[n].py = config.y0 ;
-				particles.states[n].ptheta = config.theta0 ;
-				particles.states[n].vx = config.vx0 ;
-				particles.states[n].vy = config.vy0 ;
-				particles.states[n].vtheta = config.vtheta0 ;
-				particles.weights[n] = -log(config.nParticles) ;
-				if ( config.filterType == CPHD_TYPE )
-				{
-					particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
-				}
-		}
-		if ( config.filterType == CPHD_TYPE )
-		{
-			particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
-			particles.cardinality_birth[0] = 0 ;
-		}
+        int nSteps = 0 ;
+        if ( !has_timestamps )
+        {
+            nSteps = allMeasurements.size() ;
+        }
+        else
+        {
+            // check that we have the same number of timestamps as inputs
+            if (measurement_times.size() != allMeasurements.size())
+            {
+                cout << "mismatched measurements and measurement timestamps!" << endl ;
+                exit(1) ;
+            }
+            if ( control_times.size() != all_controls.size())
+            {
+                cout << "mismatched controls and controls timestamps!" << endl ;
+                exit(1) ;
+            }
+
+            nSteps = measurement_times.size() + control_times.size() ;
+        }
+
+
+        // initialize particles
+        ParticleSLAM particles( config.nParticles ) ;
+        for (int n = 0 ; n < config.nParticles ; n++ )
+        {
+            particles.states[n].px = config.x0 ;
+            particles.states[n].py = config.y0 ;
+            particles.states[n].ptheta = config.theta0 ;
+            particles.states[n].vx = config.vx0 ;
+            particles.states[n].vy = config.vy0 ;
+            particles.states[n].vtheta = config.vtheta0 ;
+            particles.weights[n] = -log(config.nParticles) ;
+            if ( config.filterType == CPHD_TYPE )
+            {
+                particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
+            }
+        }
+        if ( config.filterType == CPHD_TYPE )
+        {
+                particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
+                particles.cardinality_birth[0] = 0 ;
+        }
 
         // do the simulation
         measurementSet ZZ ;
@@ -653,23 +708,55 @@ int main(int argc, char *argv[])
 		vector<REAL> cn_estimate ;
         REAL nEff ;
         timeval start, stop ;
+        REAL current_time = 0 ;
+        REAL last_time = 0 ;
+        REAL dt = 0 ;
+        int z_idx = 0 ;
+        int c_idx = 0 ;
+        AckermanControl current_control ;
+        current_control.alpha = 0 ;
+        current_control.v_encoder = 0 ;
         cout << "STARTING SIMULATION" << endl ;
-		if ( config.filterType == CPHD_TYPE )
-		{
-			DEBUG_MSG("Initializing CPHD constants") ;
-			initCphdConstants() ;
-		}
+        if ( config.filterType == CPHD_TYPE )
+        {
+                DEBUG_MSG("Initializing CPHD constants") ;
+                initCphdConstants() ;
+        }
         for (int n = 0 ; n < nSteps ; n++ )
         {
                 gettimeofday( &start, NULL ) ;
                 cout << "****** Time Step [" << n << "/" << nSteps << "] ******" << endl ;
-                ZZ = allMeasurements[n] ;
+                // get inputs for this time step
+                if ( has_timestamps )
+                {
+                    last_time = current_time ;
+                    if (measurement_times[z_idx] < control_times[c_idx])
+                    {
+                        current_time = measurement_times[z_idx] ;
+                        ZZ = allMeasurements[z_idx++] ;
+                    }
+                    else
+                    {
+                        current_time = control_times[c_idx] ;
+                        current_control = all_controls[c_idx++] ;
+                        ZZ.clear();
+                    }
+                    dt = current_time - last_time ;
+                    config.dt = dt ;
+                    setDeviceConfig(config) ;
+                }
+                else
+                {
+                    ZZ = allMeasurements[n] ;
+                    current_control = all_controls[n-1] ;
+                    dt = config.dt ;
+                }
 
                 // need measurements from previous time step for births
                 if (ZPrev.size() > 0 )
                 {
-                        cout << "Adding birth terms" << endl ;
-                        addBirths(particles,ZPrev) ;
+                    cout << "Adding birth terms" << endl ;
+                    addBirths(particles,ZPrev) ;
                 }
 
                 // no motion for time step 1
@@ -681,37 +768,33 @@ int main(int argc, char *argv[])
                         if ( config.motionType == CV_MOTION )
                             phdPredict(particles) ;
                         else if ( config.motionType == ACKERMAN_MOTION )
-                            phdPredict( particles, all_controls[n-1] ) ;
+                            phdPredict( particles, current_control ) ;
                     }
                 }
 
                 // need measurments from current time step for update
                 if ( ZZ.size() > 0 )
                 {
-                        cout << "Performing PHD Update" << endl ;
-                        particlesPreMerge = phdUpdate(particles, ZZ) ;
-				}
-				cout << "Extracting SLAM state" << endl ;
-				recoverSlamState(particles, expectedPose, expectedMap, cn_estimate ) ;
+                    cout << "Performing PHD Update" << endl ;
+                    particlesPreMerge = phdUpdate(particles, ZZ) ;
+                }
+                cout << "Extracting SLAM state" << endl ;
+                recoverSlamState(particles, expectedPose, expectedMap, cn_estimate ) ;
 
 #ifdef DEBUG
 				DEBUG_MSG( "Writing Log" ) ;
-//		writeParticles(particlesPreMerge,"particlesPreMerge",n) ;
-//		writeParticlesMat(particlesPreMerge, n, "particlesPreMerge") ;
-//		writeParticles(particles,"particles",n) ;
 		writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
-//		writeLogMat(particles, expectedPose, expectedMap, cn_estimate, n) ;
 #endif
 
                 nEff = 0 ;
-				for ( int i = 0; i < particles.nParticles ; i++)
-						nEff += exp(2*particles.weights[i]) ;
-				nEff = 1.0/nEff/particles.nParticles ;
+                for ( int i = 0; i < particles.nParticles ; i++)
+                                nEff += exp(2*particles.weights[i]) ;
+                nEff = 1.0/nEff/particles.nParticles ;
                 DEBUG_VAL(nEff) ;
                 if (nEff <= config.resampleThresh )
                 {
-					DEBUG_MSG("Resampling particles") ;
-					particles = resampleParticles(particles,config.nParticles) ;
+                    DEBUG_MSG("Resampling particles") ;
+                    particles = resampleParticles(particles,config.nParticles) ;
                 }
                 ZPrev = ZZ ;
                 gettimeofday( &stop, NULL ) ;
@@ -726,17 +809,6 @@ int main(int argc, char *argv[])
                         cout << "nan weights detected! exiting..." << endl ;
                         break ;
                 }
-//                for ( int i =0 ; i < config.nParticles ; i++ )
-//                {
-//                        for ( int j = 0 ; j < (int)particles.maps[i].size() ; j++ )
-//                        {
-//                                if ( particles.maps[i][j].weight == 0 )
-//                                {
-//                                        DEBUG_MSG("Invalid features detected!") ;
-//                                        exit(1) ;
-//                                }
-//                        }
-//                }
         }
 #ifdef DEBUG
         string command("mv *.mat ") ;
@@ -746,7 +818,6 @@ int main(int argc, char *argv[])
         command += timestamp ;
         system( command.c_str() ) ;
 #endif
-//	cudaPrintfEnd() ;
         cout << "DONE!" << endl ;
         return 0 ;
 }

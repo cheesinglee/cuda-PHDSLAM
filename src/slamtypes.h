@@ -209,10 +209,9 @@ public:
 	}
 };
 
-class ParticleSlamVp{
+class FastSLAM:ParticleSLAM{
 public:
-    int n_particles ;
-    vector<double> weights ;
+    vector< vector<int> > assoc ;
 
 };
 

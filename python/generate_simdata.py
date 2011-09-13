@@ -28,7 +28,7 @@ trajectory = file.root.traj[:].transpose()
 controls = file.root.controls[:].transpose()
 file.close()
 
-n_runs = 10 
+n_runs = 50 
 
 print('generating simulation inputs...')
 for n in xrange(n_runs):

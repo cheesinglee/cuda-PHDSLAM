@@ -322,6 +322,7 @@ REAL safeLog( REAL x )
         return log(x) ;
 }
 
+
 double logSumExp( vector<double>log_terms )
 {
     double val = log_terms[0] ;
@@ -1850,7 +1851,6 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     __syncthreads() ;
                 }
                 REAL tmp = 0 ;
-                __syncthreads() ;
                 if ( tid < n_measure )
                 {
                     int idx = update_offset + n_features
@@ -2025,7 +2025,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
 
                 if ( tid == 0 )
                 {
-                    REAL log_den = safeLog(updated_features[update_offset+max_feature].weight)
+                    w_partial = 0 ;
+                    for ( int i = 0 ; i <= n_measure ; i++ )
+                        w_partial += updated_features[update_offset + i*n_features + max_feature].weight ;
+                    REAL log_den = safeLog(w_partial)
                             + cn_predict - cn_update + dev_config.clutterRate ;
 //                    REAL log_den = n_measure*safeLog(dev_config.clutterDensity)
 //                            + safeLog(updated_features[update_offset+max_feature].weight) ;
@@ -2235,31 +2238,38 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
 }
 
 
-__global__ void
-fastSlamUpdateKernel( Gaussian2D* predict_features, ConstantVelocityState* poses,
-                      int* map_offsets, int n_measure, REAL* log_g )
-{
-    int f_idx = threadIdx.x ;
-    int z_idx = threadIdx.y ;
-    int map_idx = blockIdx.x ;
-    int n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
-    int predict_offset = map_offsets[map_idx] ;
-    int update_offset = predict_offset*(n_measure) ;
-    int g_idx = update_offset + z_idx*n_features + f_idx ;
+//__global__ void
+//fastSlamUpdateKernel( Gaussian2D* predict_features, ConstantVelocityState* poses,
+//                      int* map_offsets, int n_measure, REAL* log_g )
+//{
+//    int f_idx = threadIdx.x ;
+//    int z_idx = threadIdx.y ;
+//    int map_idx = blockIdx.x ;
+//    int n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
+//    int predict_offset = map_offsets[map_idx] ;
+//    int update_offset = predict_offset*(n_measure) ;
+//    int g_idx = update_offset + z_idx*n_features + f_idx ;
 
-    Gaussian2D feature = predict_features[predict_offset+f_idx] ;
-    ConstantVelocityState pose = poses[map_idx] ;
+//    Gaussian2D feature = predict_features[predict_offset+f_idx] ;
+//    ConstantVelocityState pose = poses[map_idx] ;
 
-    RangeBearingMeasurement z_predict ;
-    REAL K[4] ;
-    REAL S_inverse[4] ;
-    REAL cov_update[4] ;
-    REAL det_sigma ;
-    REAL feature_pd ;
-    REAL S_inv[4] ;
-    computePreUpdateComponents(pose,feature,K,cov_update,&det_sigma,S_inv,
-                               &feature_pd,&z_predict) ;
-}
+//    RangeBearingMeasurement z_predict ;
+//    REAL K[4] ;
+//    REAL S_inverse[4] ;
+//    REAL cov_update[4] ;
+//    REAL det_sigma ;
+//    REAL feature_pd ;
+//    REAL S_inv[4] ;
+//    computePreUpdateComponents(pose,feature,K,cov_update,&det_sigma,S_inv,
+//                               &feature_pd,&z_predict) ;
+//}
+
+//void
+//fastSlamDataAssociation()
+//{
+//    // compute individual compatibility
+//    // compute jcbb association
+//}
 
 ParticleSLAM
 phdUpdate(ParticleSLAM& particles, measurementSet measurements)
