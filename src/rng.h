@@ -9,6 +9,8 @@
   to be compiled with GCC.
  */
 
+//extern "C"
+//void seed_rng() ;
 
 /// draws a sample from a normal distribution, with mean = 0 and standard distribution = 1
 extern "C"

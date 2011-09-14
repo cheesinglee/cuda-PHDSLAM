@@ -1647,6 +1647,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
     //			mergedSizes[map_idx] = n_update ;
                 cardinality_predict = 0.0 ;
                 cardinality_updated = 0.0 ;
+                max_feature = 0 ;
             }
             __syncthreads() ;
 
@@ -1820,7 +1821,6 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
             // choose the feature for the single-feature particle weight update
             if ( dev_config.particleWeighting == 2 )
             {
-                max_feature = 0 ;
                 REAL max_weight = -FLT_MAX ;
                 for ( int n = 0 ; n < n_features ; n += blockDim.x )
                 {
@@ -1828,11 +1828,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     __syncthreads() ;
                     if ( tid+n < n_features)
                     {
-                        for ( int i = update_offset+n_features+tid+n ;
-                              i < update_offset+n_update ;
-                              i += n_features )
+                        for ( int i = 0 ;i < n_measure ; i += 1 )
                         {
-                            sdata[tid] = fmax(sdata[tid],updated_features[i].weight ) ;
+                            int idx = update_offset + (i+1)*n_features + tid + n ;
+                            sdata[tid] = fmax(sdata[tid],updated_features[idx].weight ) ;
                         }
                     }
                     __syncthreads() ;
@@ -1861,7 +1860,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 __syncthreads() ;
                 if ( tid == 0 )
                 {
-                    particle_weight = (1-dev_config.pd)*pow(dev_config.clutterDensity,n_measure)
+                    particle_weight = updated_features[update_offset+max_feature].weight*pow(dev_config.clutterDensity,n_measure)
                             + pow(dev_config.clutterDensity,n_measure-1)*sdata[0] ;
                 }
                 __syncthreads() ;
@@ -1993,43 +1992,42 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
             // Single-Feature IID cluster assumption
             else if ( dev_config.particleWeighting == 2 )
             {
-                REAL cn_predict = 0 ;
-                REAL cn_update = 0 ;
+//                REAL cn_predict = 0 ;
+//                REAL cn_update = 0 ;
 
-                // predicted cardinality
-                for ( int i = 0 ; i < n_features ; i+= blockDim.x)
-                {
-                    if ( tid + i < n_features )
-                        w_partial = inRangeFeatures[predict_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction(sdata,w_partial,tid);
-                    cn_predict += sdata[0] ;
-                    __syncthreads() ;
-                }
+//                // predicted cardinality
+//                for ( int i = 0 ; i < n_features ; i+= blockDim.x)
+//                {
+//                    if ( tid + i < n_features )
+//                        w_partial = inRangeFeatures[predict_offset+i+tid].weight ;
+//                    else
+//                        w_partial = 0.0f ;
+//                    sumByReduction(sdata,w_partial,tid);
+//                    cn_predict += sdata[0] ;
+//                    __syncthreads() ;
+//                }
 
-                // updated cardinality = sum of updated weights
-                for ( int i = 0 ; i < n_update ; i += blockDim.x )
-                {
-                    // to avoid divergence in the reduction function call, load weight
-                    // into temp variable first
-                    if ( tid + i < n_update )
-                        w_partial = updated_features[update_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction( sdata, w_partial, tid );
-                    if ( tid == 0 )
-                        cn_update += sdata[0] ;
-                    __syncthreads() ;
-                }
+//                // updated cardinality = sum of updated weights
+//                for ( int i = 0 ; i < n_update ; i += blockDim.x )
+//                {
+//                    if ( tid + i < n_update )
+//                        w_partial = updated_features[update_offset+i+tid].weight ;
+//                    else
+//                        w_partial = 0.0f ;
+//                    sumByReduction( sdata, w_partial, tid );
+//                    if ( tid == 0 )
+//                        cn_update += sdata[0] ;
+//                    __syncthreads() ;
+//                }
 
                 if ( tid == 0 )
                 {
                     w_partial = 0 ;
                     for ( int i = 0 ; i <= n_measure ; i++ )
                         w_partial += updated_features[update_offset + i*n_features + max_feature].weight ;
-                    REAL log_den = safeLog(w_partial)
-                            + cn_predict - cn_update + dev_config.clutterRate ;
+                    REAL log_den = safeLog(w_partial) ;
+//                    REAL log_den = safeLog(w_partial)
+//                            + cn_predict - cn_update + dev_config.clutterRate ;
 //                    REAL log_den = n_measure*safeLog(dev_config.clutterDensity)
 //                            + safeLog(updated_features[update_offset+max_feature].weight) ;
                     particleWeights[map_idx] = safeLog(particle_weight) - log_den ;
@@ -2773,7 +2771,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                                nParticles*sizeof(REAL),
                                cudaMemcpyDeviceToHost ) ) ;
         // compute Vo empty map particle weighting
-        if ( config.particleWeighting==1)
+        if ( config.particleWeighting==1 || config.particleWeighting==2)
         {
             Gaussian2D* maps_combined = (Gaussian2D*)malloc( combined_size ) ;
             CUDA_SAFE_CALL(cudaMemcpy(maps_combined,dev_maps_combined,combined_size,
@@ -2792,10 +2790,17 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                 for ( int j = 0 ; j < mapSizes[i] ; j++)
                     cardinality_update += maps_combined[offset_updated++].weight ;
 
-                // compute particle weight
-                particle_weights[i] = n_measure*safeLog(config.clutterDensity) +
-                        cardinality_update - cardinality_predict
-                        - config.clutterRate ;
+                if ( config.particleWeighting == 1)
+                {
+                    // compute particle weight
+                    particle_weights[i] = n_measure*safeLog(config.clutterDensity)
+                            + cardinality_update - cardinality_predict
+                            - config.clutterRate ;
+                }
+                else
+                {
+                    particle_weights[i] -= (cardinality_predict-cardinality_update+config.clutterDensity) ;
+                }
             }
             free(maps_combined) ;
         }
@@ -3586,4 +3591,5 @@ void
 setDeviceConfig( const SlamConfig& config )
 {
     CUDA_SAFE_CALL(cudaMemcpyToSymbol( dev_config, &config, sizeof(SlamConfig) ) ) ;
+//    seed_rng();
 }

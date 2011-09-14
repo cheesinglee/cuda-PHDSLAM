@@ -753,7 +753,7 @@ int main(int argc, char *argv[])
                 }
 
                 // need measurements from previous time step for births
-                if (ZPrev.size() > 0 )
+                if (ZPrev.size() > 0 )//&& (n % 4 == 0) )
                 {
                     cout << "Adding birth terms" << endl ;
                     addBirths(particles,ZPrev) ;
@@ -773,7 +773,7 @@ int main(int argc, char *argv[])
                 }
 
                 // need measurments from current time step for update
-                if ( ZZ.size() > 0 )
+                if ( (ZZ.size() > 0) )//&& (n % 4 == 0) )
                 {
                     cout << "Performing PHD Update" << endl ;
                     particlesPreMerge = phdUpdate(particles, ZZ) ;
@@ -782,13 +782,13 @@ int main(int argc, char *argv[])
                 recoverSlamState(particles, expectedPose, expectedMap, cn_estimate ) ;
 
 #ifdef DEBUG
-				DEBUG_MSG( "Writing Log" ) ;
+                DEBUG_MSG( "Writing Log" ) ;
 		writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
 #endif
 
                 nEff = 0 ;
                 for ( int i = 0; i < particles.nParticles ; i++)
-                                nEff += exp(2*particles.weights[i]) ;
+                    nEff += exp(2*particles.weights[i]) ;
                 nEff = 1.0/nEff/particles.nParticles ;
                 DEBUG_VAL(nEff) ;
                 if (nEff <= config.resampleThresh )
