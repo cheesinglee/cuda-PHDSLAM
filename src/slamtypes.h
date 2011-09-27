@@ -153,6 +153,7 @@ typedef struct{
 	int distanceMetric ;
 
     int motionType ;
+    int mapEstimate ;
 
     // ackerman steering stuff
     REAL l ;
@@ -170,43 +171,43 @@ typedef vector<RangeBearingMeasurement> measurementSet ;
 class ParticleSLAM{
 public:
     int nParticles ;
-	vector<double> weights ;
+    vector<double> weights ;
     vector<ConstantVelocityState> states ;
     vector<gaussianMixture> maps ;
-	vector< vector<REAL> > cardinalities ;
-	vector<char> compatibleZ ;
-	vector<REAL> cardinality_birth ;
+    vector< vector<REAL> > cardinalities ;
+    vector<char> compatibleZ ;
+    vector<REAL> cardinality_birth ;
 
-	ParticleSLAM(unsigned int n = 100)
-        :
-          nParticles(n),
-          weights(n),
-          states(n),
-          maps(n),
-		  cardinalities(n),
-		  compatibleZ(),
-		  cardinality_birth()
-	{
-	}
-	ParticleSLAM(const ParticleSLAM &ps)
-	{
-		nParticles = ps.nParticles ;
-        states = ps.states ;
-        maps = ps.maps ;
-        weights = ps.weights ;
-        compatibleZ = ps.compatibleZ ;
-		cardinalities = ps.cardinalities ;
-	}
-	ParticleSLAM operator=(const ParticleSLAM ps)
-	{
+    ParticleSLAM(unsigned int n = 100)
+    :
+      nParticles(n),
+      weights(n),
+      states(n),
+      maps(n),
+      cardinalities(n),
+      compatibleZ(),
+      cardinality_birth()
+    {
+    }
+    ParticleSLAM(const ParticleSLAM &ps)
+    {
         nParticles = ps.nParticles ;
         states = ps.states ;
         maps = ps.maps ;
         weights = ps.weights ;
         compatibleZ = ps.compatibleZ ;
-		cardinalities = ps.cardinalities ;
+        cardinalities = ps.cardinalities ;
+    }
+    ParticleSLAM operator=(const ParticleSLAM ps)
+    {
+        nParticles = ps.nParticles ;
+        states = ps.states ;
+        maps = ps.maps ;
+        weights = ps.weights ;
+        compatibleZ = ps.compatibleZ ;
+        cardinalities = ps.cardinalities ;
         return *this ;
-	}
+    }
 };
 
 class FastSLAM:ParticleSLAM{

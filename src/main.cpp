@@ -1,10 +1,12 @@
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include <fstream>
 #include <vector>
 #include <map>
 #include <algorithm>
 #include <sstream>
+#include <iterator>
 
 //// matlab output
 //#include <mex.h>
@@ -364,16 +366,20 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxDestroyArray( mxStates ) ;
 //}
 
-void writeParticles(ParticleSLAM particles, const char* filename, int t = -1)
+void writeParticles(ParticleSLAM particles, std::string filename, int t = -1)
 {
-        std::string particlesFilename(filename) ;
-        if ( t >= 0 )
-        {
-                char timeStep[8] ;
-                sprintf(timeStep,"%d",t) ;
-                particlesFilename += timeStep ;
-        }
-        particlesFilename += ".log" ;
+        std::ostringstream oss ;
+        oss << filename ;
+        oss << setfill('0') << setw(5) ;
+        oss << t << ".log" ;
+        std::string particlesFilename = oss.str() ;
+//        if ( t >= 0 )
+//        {
+//                char timeStep[8] ;
+//                sprintf(timeStep,"%d",t) ;
+//                particlesFilename += timeStep ;
+//        }
+//        particlesFilename += ".log" ;
         fstream particlesFile(particlesFilename.c_str(), fstream::out|fstream::app ) ;
         if (!particlesFile)
         {
@@ -404,27 +410,62 @@ void writeParticles(ParticleSLAM particles, const char* filename, int t = -1)
         particlesFile.close() ;
 }
 
+ParticleSLAM loadParticles(std::string filename)
+{
+    ifstream file( filename.c_str() ) ;
+    int n_particles = std::count(std::istreambuf_iterator<char>(file),
+                                std::istreambuf_iterator<char>(), '\n');
+    ParticleSLAM particles(n_particles) ;
+    cout << "reading " << n_particles << " particles from " << filename << endl ;
+    file.seekg(ifstream::beg) ;
+    for ( int n = 0 ; n < n_particles ; n++ )
+    {
+        std::string line ;
+        getline(file,line) ;
+//        cout << line << endl ;
+        istringstream iss(line) ;
+        iss >> particles.weights[n] >> particles.states[n].px
+            >> particles.states[n].py >> particles.states[n].ptheta
+            >> particles.states[n].vx >> particles.states[n].vy
+            >> particles.states[n].vtheta ;
+        while ( !iss.eof() )
+        {
+            Gaussian2D feature ;
+            iss >> feature.weight >> feature.mean[0] >> feature.mean[1]
+                >> feature.cov[0] >> feature.cov[1] >> feature.cov[2]
+                >> feature.cov[3] ;
+            particles.maps[n].push_back(feature) ;
+        }
+        particles.maps[n].pop_back() ;
+//        cout << "read " << particles.maps[n].size() << " features" << endl ;
+    }
+
+    return particles ;
+}
+
 void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
 				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
 {
-		// create the filename
-		std::ostringstream oss ;
-		oss << "state_estimate" << t << ".log" ;
-		std::string filename = oss.str() ;
-		fstream stateFile(filename.c_str(), fstream::out|fstream::app ) ;
+        // create the filename
+        std::ostringstream oss ;
+        oss << "state_estimate" ;
+        oss << setfill('0') << setw(5) ;
+        oss << t << ".log" ;
+        std::string filename = oss.str() ;
+        fstream stateFile(filename.c_str(), fstream::out|fstream::app ) ;
         stateFile << expectedPose.px << " " << expectedPose.py << " "
-                        << expectedPose.ptheta << " " << expectedPose.vx << " "
-						<< expectedPose.vy << " " << expectedPose.vtheta << " "
-						<< endl ;
+                    << expectedPose.ptheta << " " << expectedPose.vx << " "
+                    << expectedPose.vy << " " << expectedPose.vtheta << " "
+                    << endl ;
         for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
         {
-                stateFile << expectedMap[n].weight << " "
-                                << expectedMap[n].mean[0] << " "
-                                << expectedMap[n].mean[1] << " "
-                                << expectedMap[n].cov[0] << " "
-                                << expectedMap[n].cov[1] << " "
-                                << expectedMap[n].cov[2] << " "
-                                << expectedMap[n].cov[3] << " " ;
+            stateFile << expectedMap[n].weight << " "
+                        << expectedMap[n].mean[0] << " "
+                        << expectedMap[n].mean[1] << " "
+                        << expectedMap[n].cov[0] << " "
+                        << expectedMap[n].cov[1] << " "
+                        << expectedMap[n].cov[2] << " "
+                        << expectedMap[n].cov[3] << " " ;
         }
         stateFile << endl ;
 
@@ -438,7 +479,7 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
             times = config.nPredictParticles ;
         }
 
-		// particle weights
+        // particle weights
         for ( int i = 0 ; i < times; i++ )
         {
             for ( int n = 0 ; n < particles.nParticles ; n++ )
@@ -448,7 +489,7 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
         }
 		stateFile << endl ;
 
-		// particle poses
+        // particle poses
         for ( int i = 0 ; i < times ; i++ )
         {
             for ( int n = 0 ; n < particles.nParticles ; n++ )
@@ -557,11 +598,12 @@ void loadConfig(const char* filename)
             ("max_features", value<int>(&config.maxFeatures)->default_value(100), "Maximum number of features in map")
             ("min_feature_weight", value<REAL>(&config.minFeatureWeight)->default_value(0.00001), "Minimum feature weight")
             ("particle_weighting", value<int>(&config.particleWeighting)->default_value(1), "Particle weighting scheme: 1 = cluster process 2 = Vo's")
-			("daughter_mixture_type", value<int>(&config.daughterMixtureType)->default_value(0), "0: Gaussian, 1: Particle")
-			("n_daughter_particles", value<int>(&config.nDaughterParticles)->default_value(50), "Number of particles to represet each map landmark")
-			("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
-			("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
-			("distance_metric", value<int>(&config.distanceMetric)->default_value(0), "0 = Mahalanobis, 1 = Hellinger")
+            ("daughter_mixture_type", value<int>(&config.daughterMixtureType)->default_value(0), "0: Gaussian, 1: Particle")
+            ("n_daughter_particles", value<int>(&config.nDaughterParticles)->default_value(50), "Number of particles to represet each map landmark")
+            ("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
+            ("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
+            ("map_estimate", value<int>(&config.mapEstimate)->default_value(1), "Map state estimate 0 = MAP, 1 = EAP")
+            ("distance_metric", value<int>(&config.distanceMetric)->default_value(0), "0 = Mahalanobis, 1 = Hellinger")
             ("h", value<REAL>(&config.h)->default_value(0), "Half-axle length")
             ("l", value<REAL>(&config.l)->default_value(0), "Wheelbase length")
             ("a", value<REAL>(&config.a)->default_value(0), "x-distance from rear axle to sensor")
@@ -772,7 +814,14 @@ int main(int argc, char *argv[])
                     }
                 }
 
+//                ostringstream oss ;
+//                oss << "ackerman3_13_1cluster_allparticles/particles_predict" ;
+//                oss << setfill('0') << setw(5) ;
+//                oss << n << ".log" ;
+//                particles = loadParticles(oss.str()) ;
+
                 // need measurments from current time step for update
+                 writeParticles(particles,"particles_predict",n) ;
                 if ( (ZZ.size() > 0) )//&& (n % 4 == 0) )
                 {
                     cout << "Performing PHD Update" << endl ;
@@ -784,6 +833,7 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
                 DEBUG_MSG( "Writing Log" ) ;
 		writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
+                writeParticles(particles,"particles",n) ;
 #endif
 
                 nEff = 0 ;
