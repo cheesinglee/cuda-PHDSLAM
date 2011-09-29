@@ -8,12 +8,15 @@ SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
     src/phdfilterwrapper.cpp \
-    src/fastslam.cu
+    src/fastslam.cu \
+    src/munkres.cu
 # Cuda sources
 SOURCES -= src/phdfilter.cu \
-         src/fastslam.cu
-CUDA_SOURCES += src/phdfilter.cu \
-            src/fastslam.cu
+         src/fastslam.cu \
+        src/munkres.cu
+CUDA_SOURCES += src/phdfilter.cu# \
+#            src/fastslam.cu \
+#            src/munkres.cu
 # Project dir and outputs
 PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
@@ -101,3 +104,4 @@ HEADERS += \
 
 OTHER_FILES += \
     cfg/config.cfg
+

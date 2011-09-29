@@ -80,6 +80,18 @@ void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPos
 
 extern "C"
 void setDeviceConfig( const SlamConfig& config ) ;
+
+extern "C"
+__device__ void
+computePreUpdateComponents( ConstantVelocityState pose,
+                            Gaussian2D feature, REAL* K,
+                            REAL* cov_update, REAL* det_sigma,
+                            REAL* S, REAL* feature_pd,
+                            RangeBearingMeasurement* z_predict ) ;
+
+extern "C"
+__host__ __device__ REAL
+wrapAngle(REAL a) ;
 //--- End external function declaration
 
 // SLAM configuration, externally declared
@@ -107,6 +119,8 @@ REAL* dev_cn_clutter ;
 
 //ConstantVelocityModelProps modelProps  = {STDX, STDY,STDTHETA} ;
 //ConstantVelocity2DKinematicModel motionModel(modelProps) ;
+
+/// convolution of two 1D vectors
 __host__ std::vector<REAL>
 conv(std::vector<REAL> a, std::vector<REAL> b)
 {
@@ -1028,7 +1042,7 @@ void addBirths(ParticleSLAM& particles, measurementSet measurements )
   */
 __global__ void
 computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticles,
-                ConstantVelocityState* poses, char* inRange, int* nInRange )
+                ConstantVelocityState* poses, char* inRange, int* nInRange, int* n_out_range2 )
 {
     int tid = threadIdx.x ;
 
@@ -1036,6 +1050,7 @@ computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticl
     int n_featuresBlock ;
     // number of inrange features in the particle
     __shared__ int nInRangeBlock ;
+    __shared__ int n_out_range2_block ;
     // vehicle pose of the thread block
     ConstantVelocityState blockPose ;
 
@@ -1051,7 +1066,10 @@ computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticl
                 predict_offset += mapSizes[i] ;
             // particle-wide values
             if ( tid == 0 )
+            {
                 nInRangeBlock = 0 ;
+                n_out_range2_block = 0 ;
+            }
             blockPose = poses[map_idx] ;
             n_featuresBlock = mapSizes[map_idx] ;
             __syncthreads() ;
@@ -1080,6 +1098,12 @@ computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticl
                         atomicAdd( &nInRangeBlock, 1 ) ;
                         inRange[featureIdx] = 1 ;
                     }
+                    else if ( r <= 1.2*dev_config.maxRange &&
+                              fabs(bearing) <= 1.2*dev_config.maxBearing )
+                    {
+                        inRange[featureIdx] = 2 ;
+                        atomicAdd( &n_out_range2_block, 1 ) ;
+                    }
                 }
             }
             // store nInrange
@@ -1087,6 +1111,7 @@ computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticl
             if ( tid == 0 )
             {
                 nInRange[map_idx] = nInRangeBlock ;
+                n_out_range2[map_idx] = n_out_range2_block ;
             }
         }
     }
@@ -2391,6 +2416,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     Gaussian2D* dev_maps = NULL ;
     int* dev_map_sizes = NULL ;
     int* dev_n_in_range = NULL ;
+    int* dev_n_out_range2 = NULL ;
     char* dev_in_range = NULL ;
     ConstantVelocityState* dev_poses = NULL ;
     CUDA_SAFE_CALL(
@@ -2401,6 +2427,9 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                             nParticles*sizeof(int) ) ) ;
     CUDA_SAFE_CALL(
                 cudaMalloc( (void**)&dev_n_in_range,
+                            nParticles*sizeof(int) ) ) ;
+    CUDA_SAFE_CALL(
+                cudaMalloc( (void**)&dev_n_out_range2,
                             nParticles*sizeof(int) ) ) ;
     CUDA_SAFE_CALL(
                 cudaMalloc( (void**)&dev_in_range,
@@ -2428,12 +2457,15 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     DEBUG_MSG("launching computeInRangeKernel") ;
     DEBUG_VAL(nThreads) ;
     computeInRangeKernel<<<nParticles,nThreads>>>
-        ( dev_maps, dev_map_sizes, nParticles, dev_poses, dev_in_range, dev_n_in_range) ;
+        ( dev_maps, dev_map_sizes, nParticles, dev_poses, dev_in_range,
+          dev_n_in_range, dev_n_out_range2 ) ;
     CUDA_SAFE_THREAD_SYNC();
 
     // allocate outputs
     vector<char> in_range(totalFeatures) ;
     vector<int> n_in_range_vec(nParticles) ;
+    vector<int> n_out_range1_vec(nParticles) ;
+    vector<int> n_out_range2_vec(nParticles) ;
 
     // copy outputs
     CUDA_SAFE_CALL(
@@ -2444,30 +2476,44 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
         cudaMemcpy( &n_in_range_vec[0],dev_n_in_range,nParticles*sizeof(int),
                     cudaMemcpyDeviceToHost )
     ) ;
+    CUDA_SAFE_CALL(
+        cudaMemcpy( &n_out_range2_vec[0],dev_n_out_range2,nParticles*sizeof(int),
+                    cudaMemcpyDeviceToHost )
+    ) ;
 
     // get total number of in-range features
     int n_in_range = 0 ;
-    vector<int> n_out_range_vec(nParticles) ;
+    int n_out_range = 0 ;
+    int n_out_range1 = 0 ;
+    int n_out_range2 = 0 ;
     for ( int i = 0 ; i < nParticles ; i++ )
     {
         n_in_range += n_in_range_vec[i] ;
-        n_out_range_vec[i] = particles.maps[i].size() -  n_in_range_vec[i] ;
+        n_out_range1_vec[i] = particles.maps[i].size() -  n_in_range_vec[i]
+                - n_out_range2_vec[i] ;
+        n_out_range2 += n_out_range2_vec[i] ;
     }
-    int n_out_range = totalFeatures - n_in_range ;
 
     // divide features into in-range/out-of-range parts
+    n_out_range = totalFeatures - n_in_range ;
+    n_out_range1 = n_out_range - n_out_range2 ;
     DEBUG_VAL(n_in_range) ;
-    DEBUG_VAL(n_out_range) ;
+    DEBUG_VAL(n_out_range1) ;
+    DEBUG_VAL(n_out_range2) ;
     gaussianMixture features_in(n_in_range) ;
-    gaussianMixture features_out(n_out_range ) ;
+    gaussianMixture features_out1(n_out_range1) ;
+    gaussianMixture features_out2(n_out_range2) ;
     int idx_in = 0 ;
     int idx_out = 0 ;
+    int idx_out2 = 0 ;
     for ( int i = 0 ; i < totalFeatures ; i++ )
     {
         if (in_range[i] == 1)
             features_in[idx_in++] = concat[i] ;
+        else if (in_range[i] == 2 )
+            features_out2[idx_out2++] = concat[i] ;
         else
-            features_out[idx_out++] = concat[i] ;
+            features_out1[idx_out++] = concat[i] ;
     }
 
     // free memory
@@ -2830,13 +2876,13 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
 //                                          dev_n_merged, dev_merged_flags,
 //                                          dev_map_sizes,nParticles);
 
-    // recombine updated in-range map with out-of-range map and do merging
+    // recombine updated in-range map with nearly in-range map do merging
     Gaussian2D* dev_maps_combined = NULL ;
     bool* dev_merged_flags_combined = NULL ;
-    size_t combined_size = (n_update+n_out_range)*sizeof(Gaussian2D) ;
+    size_t combined_size = (n_update+n_out_range2)*sizeof(Gaussian2D) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags_combined,
-                                (n_update+n_out_range)*sizeof(bool) ) ) ;
+                                (n_update+n_out_range2)*sizeof(bool) ) ) ;
     CUDA_SAFE_CALL( cudaMalloc((void**)&dev_maps_merged,
                            combined_size ) ) ;
     int offset = 0 ;
@@ -2845,17 +2891,17 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     for ( int n = 0 ; n < nParticles ; n++ )
     {
         // out-of-range map for particle n
-        vector<char> merged_flags_out(n_out_range_vec[n],0) ;
+        vector<char> merged_flags_out(n_out_range2_vec[n],0) ;
         CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
-                                    &features_out[offset_out],
-                                    n_out_range_vec[n]*sizeof(Gaussian2D),
+                                    &features_out2[offset_out],
+                                    n_out_range2_vec[n]*sizeof(Gaussian2D),
                                     cudaMemcpyHostToDevice ) ) ;
         CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
                                     &merged_flags_out[0],
-                                    n_out_range_vec[n]*sizeof(bool),
+                                    n_out_range2_vec[n]*sizeof(bool),
                                     cudaMemcpyHostToDevice) ) ;
-        offset += n_out_range_vec[n] ;
-        offset_out += n_out_range_vec[n] ;
+        offset += n_out_range2_vec[n] ;
+        offset_out += n_out_range2_vec[n] ;
 
         // in-range map for particle n
         CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
@@ -2868,7 +2914,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                                     ,cudaMemcpyDeviceToDevice ) ) ;
         offset += n_in_range_vec[n]*(n_measure+1) ;
         offset_updated += n_in_range_vec[n]*(n_measure+1) ;
-        mapSizes[n] = n_out_range_vec[n] + n_in_range_vec[n]*(n_measure+1) ;
+        mapSizes[n] = n_out_range2_vec[n] + n_in_range_vec[n]*(n_measure+1) ;
     }
 
     CUDA_SAFE_CALL( cudaMemcpy( dev_map_sizes, &mapSizes[0],
@@ -2917,7 +2963,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
 
     DEBUG_MSG("Saving update results") ;
     offset_updated = 0 ;
-//    int offset_out = 0 ;
+    offset_out = 0 ;
     REAL weightSum = 0 ;
     int cn_offset = 0 ;
 
@@ -2940,16 +2986,16 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                                           maps_updated+offset_updated+mapSizes[i] ) ;
         offset_updated += mapSizes[i] ;
 
-//		if ( n_out_range > 0 && n_out_range_vec[i] > 0 )
-//		{
-//			particles.maps[i].insert( particles.maps[i].end(),
-//								features_out.begin()+offset_out,
-//								features_out.begin()+offset_out+n_out_range_vec[i] ) ;
-//			particlesPreMerge.maps[i].insert( particlesPreMerge.maps[i].end(),
-//											features_out.begin()+offset_out,
-//											features_out.begin()+offset_out+n_out_range_vec[i] ) ;
-//			offset_out += n_out_range_vec[i] ;
-//		}
+        if ( n_out_range1 > 0 && n_out_range1_vec[i] > 0 )
+        {
+                particles.maps[i].insert( particles.maps[i].end(),
+                                        features_out1.begin()+offset_out,
+                                        features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
+                particlesPreMerge.maps[i].insert( particlesPreMerge.maps[i].end(),
+                                                features_out1.begin()+offset_out,
+                                                features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
+                offset_out += n_out_range1_vec[i] ;
+        }
 
         if ( config.filterType == CPHD_TYPE )
         {
