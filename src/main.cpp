@@ -821,7 +821,7 @@ int main(int argc, char *argv[])
 //                particles = loadParticles(oss.str()) ;
 
                 // need measurments from current time step for update
-                 writeParticles(particles,"particles_predict",n) ;
+//                 writeParticles(particles,"particles_predict",n) ;
                 if ( (ZZ.size() > 0) )//&& (n % 4 == 0) )
                 {
                     cout << "Performing PHD Update" << endl ;
@@ -833,7 +833,7 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
                 DEBUG_MSG( "Writing Log" ) ;
 		writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
-                writeParticles(particles,"particles",n) ;
+//                writeParticles(particles,"particles",n) ;
 #endif
 
                 nEff = 0 ;

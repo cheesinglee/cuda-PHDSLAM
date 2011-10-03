@@ -3222,6 +3222,15 @@ gaussianMixture computeExpectedMap(ParticleSLAM particles)
     }
     gaussianMixture expected_map(total_features) ;
     std::copy( all_features,all_features+total_features, expected_map.begin() ) ;
+
+    CUDA_SAFE_CALL( cudaFree( dev_maps_in ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_maps_out ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_merged_sizes ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_merged_flags ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_map_sizes ) ) ;
+    free(all_features) ;
+    free(merged_flags) ;
+    free(maps_out) ;
     return expected_map ;
 }
 
