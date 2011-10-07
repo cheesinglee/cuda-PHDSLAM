@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <float.h>
+//#include <eigen3/Eigen/Eigen>
 
 #define REAL double
 #define PHD_TYPE 0
@@ -154,6 +155,8 @@ typedef struct{
 
     int motionType ;
     int mapEstimate ;
+    int cphdDistType ;
+    REAL nu ;
 
     // ackerman steering stuff
     REAL l ;
@@ -210,11 +213,18 @@ public:
     }
 };
 
-class FastSLAM:ParticleSLAM{
-public:
-    vector< vector<int> > assoc ;
+//class FastSLAM:ParticleSLAM{
+//public:
+//    vector< vector<int> > assoc ;
+//    vector< MatrixX2d > likelihoods ;
 
-};
+//    FastSLAM( unsigned int n = 100)
+//        :
+//          assoc(n),
+//          likelihoods(n)
+//    {}
+
+//};
 
 
 #endif /* SLAMTYPES_H_ */

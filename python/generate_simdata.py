@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
+import cPickle
 import tables
 from numpy import *
 from RangeBearingMeasurementModel import *
 import os
+from matplotlib import pyplot
 
 motion_params = {
     'std_encoder':2,
@@ -20,6 +22,7 @@ sensor_params = {
     'std_bearing':0.0349,
     'pd':0.95,
     'clutter_rate':20}
+measurement_model = RangeBearingMeasurementModel(sensor_params)
 
 print('loading mat-file...')
 file = tables.openFile('groundtruth.mat')
@@ -41,7 +44,6 @@ for n in xrange(n_runs):
     controls_noisy[1,:] = wrap_angle(controls_noisy[1,:])
     
     # generate noisy measurements
-    measurement_model = RangeBearingMeasurementModel(sensor_params)
     n_steps = size(trajectory,1)
     measurements = [] ;
     for i in xrange(n_steps):
@@ -69,6 +71,16 @@ for n in xrange(n_runs):
         z_str += '\n'
         measurements_file.write(z_str)
     measurements_file.close()
+    
+    datafile = open(dir_str+'simdata.pk2','w')
+    cPickle.dump( landmarks, datafile, cPickle.HIGHEST_PROTOCOL )
+    cPickle.dump( trajectory, datafile, cPickle.HIGHEST_PROTOCOL )
+    cPickle.dump( controls, datafile, cPickle.HIGHEST_PROTOCOL )
+    cPickle.dump( controls_noisy, datafile, cPickle.HIGHEST_PROTOCOL )
+    cPickle.dump( measurements, datafile, cPickle.HIGHEST_PROTOCOL )
+    datafile.close()
+    
+
 
 
 

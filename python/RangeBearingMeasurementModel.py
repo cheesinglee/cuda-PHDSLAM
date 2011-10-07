@@ -22,11 +22,11 @@ class RangeBearingMeasurementModel:
     def compute_measurement(self,pose,feature):
         dx = feature[0,:] - pose[0] 
         dy = feature[1,:] - pose[1]
-        range2 = dx**2 + dy**2
-        range = sqrt(range2)
-        bearing = wrap_angle( arctan2(dy,dx) ) - pose[2]
-        z = vstack((range,bearing))
-        in_range = logical_and( (range <= self.params['max_range']), 
+        r2 = dx**2 + dy**2
+        r = sqrt(r2)
+        bearing = wrap_angle( arctan2(dy,dx) - pose[2] )
+        z = vstack((r,bearing))
+        in_range = logical_and( (r <= self.params['max_range']), 
                                 (abs(bearing) <= self.params['max_bearing']) )
         return z[:,in_range]
         
@@ -59,10 +59,18 @@ class RangeBearingMeasurementModel:
         dy = feature[1,:] - pose[1]
         range2 = dx**2 + dy**2
         range = sqrt(range2)
-        bearing = wrap_angle( arctan2(dy,dx) ) - pose[2]
+        bearing = wrap_angle( arctan2(dy,dx) - pose[2] )
         in_range = logical_and( (range <= self.params['max_range']), 
                                 (abs(bearing) <= self.params['max_bearing']) ) 
         return in_range
+        
+    def invert_measurement(self, pose, z):
+        range = z[0,:]
+        bearing = z[1,:] + pose[2]
+        dx = range*cos(bearing)
+        dy = range*sin(bearing)
+        features = vstack((dx+pose[0],dy+pose[1]))
+        return features
         
         
         

@@ -27,6 +27,7 @@
 #include <cutil_inline.h>
 
 #include <boost/program_options.hpp>
+#include <boost/lexical_cast.hpp>
 
 //#define DEBUG
 
@@ -487,7 +488,7 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
                 stateFile << particles.weights[n] << " " ;
             }
         }
-		stateFile << endl ;
+        stateFile << endl ;
 
         // particle poses
         for ( int i = 0 ; i < times ; i++ )
@@ -502,7 +503,14 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
                           << particles.states[n].vtheta << " " ;
             }
         }
-		stateFile << endl ;
+        stateFile << endl ;
+
+        // cardinality distribution
+        for ( int n = 0 ; n < config.maxCardinality+1 ; n++ )
+        {
+            stateFile << cn_estimate[n] << " " ;
+        }
+        stateFile << endl ;
         stateFile.close() ;
 }
 
@@ -603,6 +611,8 @@ void loadConfig(const char* filename)
             ("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
             ("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
             ("map_estimate", value<int>(&config.mapEstimate)->default_value(1), "Map state estimate 0 = MAP, 1 = EAP")
+            ("cphd_disttype", value<int>(&config.cphdDistType)->default_value(0), "CPHD Cardinality distribution 0 = Binomial Poisson, 1 = COM-Poisson")
+            ("nu", value<REAL>(&config.nu)->default_value(1), "COM-Poisson Parameter")
             ("distance_metric", value<int>(&config.distanceMetric)->default_value(0), "0 = Mahalanobis, 1 = Hellinger")
             ("h", value<REAL>(&config.h)->default_value(0), "Half-axle length")
             ("l", value<REAL>(&config.l)->default_value(0), "Wheelbase length")
@@ -633,10 +643,13 @@ void loadConfig(const char* filename)
             config.clutterDensity = config.clutterRate
                     /( 2*config.maxBearing*config.maxRange ) ;
 
-//            // flawed clutter density calculation based on target space instead
-//            // of measurement space
-//            REAL fov_area = M_PI*pow(config.maxRange,2) * (config.maxBearing/M_PI) ;
-//            config.clutterDensity = config.clutterRate / fov_area ;
+//            variables_map::iterator it = vm.begin() ;
+//            while ( it != vm.end() )
+//            {
+//                cout << it->first << " = " << boost::lexical_cast<double>(it->second.value()) << endl ;
+//                it++ ;
+//            }
+
         }
         catch( std::exception& e )
         {
