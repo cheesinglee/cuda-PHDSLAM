@@ -1,0 +1,47 @@
+This project is still very much a work in progress; nevertheless, for the brave
+souls who would like to attempt running this code here are some pointers:
+
+--------Dependencies------
+CUDA 3.2 or greater, including the CUDA-SDK
+Boost 1.4.7 or greater
+Qt 4.x.x (for compiling with qmake only)
+
+-------Compiling---------
+Run qmake to generate makefiles. Then, type 'make -w' to compile the code. The 
+resulting executables will be placed in the bin/ directory. There are some
+convenience shell scripts included for building and running in one go.
+
+--------Configuring-------
+Options are set in the file cfg/config.cfg. There is some documentation for the
+different options at the top of the file. 
+
+---------Data----------
+At minimum, two text files for simulation data are required. One should contain
+the range-bearing measurements, and the other should contain the Ackerman
+steering control inputs. For both files, each line represents the inputs for a
+particular time step.
+ 
+Range-bearing measurements are grouped as follows:
+Range1 Bearing1 Range2 Bearing2 ... RangeM BearingM
+
+Optionally, two further text files may be specified which contain the
+timestamps in seconds for the controls and measurements. They must have the same
+number of lines as the respective data files.
+
+---------Output-------------
+Output log files are placed in a folder with the time of the simulation start.
+The main files of interest are those names state_estimatexxxxx.log, which
+consist of 5 lines:
+1. The expected vehicle pose [x y heading vx vy vheading]
+2. The estimated landmark map (MAP or EAP depending on config)
+3. Log particle weights
+4. Particle poses
+5. Cardinality distribution (CPHD only)
+
+The MATLAB script plotPhdSlam.m, found in the matlab/ folder, can assist in
+visualizing the results.
+
+Good Luck!
+Chee Sing Lee
+24 January 2012
+
