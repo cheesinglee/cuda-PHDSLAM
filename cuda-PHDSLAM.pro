@@ -9,12 +9,15 @@ SOURCES += src/main.cpp \
     src/rng.cpp \
     src/phdfilterwrapper.cpp \
     src/fastslam.cu \
-    src/munkres.cu
+    src/munkres.cu \
+    src/device_math.cu
 # Cuda sources
 SOURCES -= src/phdfilter.cu \
          src/fastslam.cu \
-        src/munkres.cu
-CUDA_SOURCES += src/phdfilter.cu# \
+        src/munkres.cu \
+        src/device_math.cu
+CUDA_SOURCES += src/phdfilter.cu
+#            src/device_math.cu
 #            src/fastslam.cu \
 #            src/munkres.cu
 # Project dir and outputs
@@ -59,10 +62,10 @@ CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options
 
 # Path to cuda SDK install
-CUDA_SDK = /usr/share/cuda-sdk/C
+CUDA_SDK = /usr/cuda/sdk/C
 #CUDA_SDK = /opt/cuda/sdk/C
 # Path to cuda toolkit install
- CUDA_DIR = /usr/ # for my machines
+CUDA_DIR = /usr/cuda/ # for my machines
 #CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
 #CUDA_GENCODE = arch=compute_13,code=sm_13
@@ -100,7 +103,8 @@ HEADERS += \
     src/slamparams.h \
     src/slamtypes.h \
     src/rng.h \
-    src/phdfilterwrapper.h
+    src/phdfilterwrapper.h \
+    src/device_math.h
 
 OTHER_FILES += \
     cfg/config.cfg

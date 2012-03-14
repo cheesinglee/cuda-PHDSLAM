@@ -13,3 +13,7 @@ Obj/*
 # simulation data
 data/*
 
+# matlab and python stuff
+python/*
+matlab/*
+
