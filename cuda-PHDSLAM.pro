@@ -2,24 +2,20 @@
 ### http://cudaspace.wordpress.com/2011/04/07/qt-creator-cuda-linux/
 
 
-
 # Basic .pro configuration
 SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
-    src/phdfilterwrapper.cpp \
-    src/fastslam.cu \
-    src/munkres.cu \
-    src/device_math.cu
-# Cuda sources
-SOURCES -= src/phdfilter.cu \
-         src/fastslam.cu \
-        src/munkres.cu \
-        src/device_math.cu
-CUDA_SOURCES += src/phdfilter.cu
-#            src/device_math.cu
-#            src/fastslam.cu \
-#            src/munkres.cu
+
+HEADERS += \
+    src/slamparams.h \
+    src/slamtypes.h \
+    src/rng.h \
+    src/device_math.cuh
+
+OTHER_FILES += \
+    cfg/config.cfg
+
 # Project dir and outputs
 PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
@@ -34,10 +30,6 @@ CONFIG += link_prl
 QT     -= gui core
 LIBS   -= -lQtGui -lQtCore
 
-### Pickling Tools ######################################
-INCLUDEPATH += PicklingTools121Release/C++
-INCLUDEPATH += PicklingTools121Release/C++/opencontainers_1_6_9/include
-#########################################################
 
 #### MATLAB external interface ###############################################
 ##MATLAB_PATH = /home/cheesinglee/matlab2010a/
@@ -58,14 +50,26 @@ LIBS += -lboost_program_options -lboost_random
 LIBS += -lfftw3 -lm
 ##########################################################################
 
+
+#### CUDA setup ########################################################
+
+# Cuda sources
+SOURCES -= \
+    src/phdfilter.cu
+
+CUDA_SOURCES += \
+    src/phdfilter.cu
+
 CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options
 
 # Path to cuda SDK install
-CUDA_SDK = /usr/cuda/sdk/C
+#CUDA_SDK = /usr/cuda/sdk/C # boromir
+CUDA_SDK = /usr/share/cuda-sdk/C # kermit
 #CUDA_SDK = /opt/cuda/sdk/C
 # Path to cuda toolkit install
-CUDA_DIR = /usr/cuda/ # for my machines
+#CUDA_DIR = /usr/cuda/ # for my machines
+CUDA_DIR = /usr/local/cuda # kermit
 #CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
 #CUDA_GENCODE = arch=compute_13,code=sm_13
@@ -98,14 +102,3 @@ cuda.dependcy_type = TYPE_C
 cuda.depend_command = $$CUDA_DIR/bin/nvcc -g -G -M $$CUDA_INC $$NVCCFLAGS ${QMAKE_FILE_NAME}
 # Tell Qt that we want add more stuff to the Makefile
 QMAKE_EXTRA_COMPILERS += cuda
-
-HEADERS += \
-    src/slamparams.h \
-    src/slamtypes.h \
-    src/rng.h \
-    src/phdfilterwrapper.h \
-    src/device_math.h
-
-OTHER_FILES += \
-    cfg/config.cfg
-

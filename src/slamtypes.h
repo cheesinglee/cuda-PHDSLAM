@@ -140,6 +140,10 @@ typedef struct{
     REAL clutterDensity ;
     REAL pd ;
 
+    // constnat position process noise
+    REAL stdVx ;
+    REAL stdVy ;
+
     int nParticles ;
 	int nPredictParticles ;
     int subdividePredict ;
@@ -177,7 +181,6 @@ typedef struct{
 
 //typedef vector<PoseParticle> ParticleVector ;
 typedef vector<Gaussian2D> gaussianMixture ;
-typedef vector<Gaussian3D> gaussianeMixture3 ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
 
 class ParticleSLAM{

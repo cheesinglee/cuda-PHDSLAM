@@ -27,6 +27,8 @@
 #include <float.h>
 //#include "cuPrintf.cu"
 
+#include "device_math.cuh"
+
 //#include "ConstantVelocity2DKinematicModel.cu"
 
 // include gcc-compiled boost rng
@@ -89,9 +91,9 @@ computePreUpdateComponents( ConstantVelocityState pose,
                             REAL* S, REAL* feature_pd,
                             RangeBearingMeasurement* z_predict ) ;
 
-extern "C"
-__host__ __device__ REAL
-wrapAngle(REAL a) ;
+//extern "C"
+//__host__ __device__ REAL
+//wrapAngle(REAL a) ;
 //--- End external function declaration
 
 // SLAM configuration, externally declared
@@ -120,282 +122,6 @@ REAL* dev_cn_clutter ;
 //ConstantVelocityModelProps modelProps  = {STDX, STDY,STDTHETA} ;
 //ConstantVelocity2DKinematicModel motionModel(modelProps) ;
 
-/// convolution of two 1D vectors
-__host__ std::vector<REAL>
-conv(std::vector<REAL> a, std::vector<REAL> b)
-{
-    int m = a.size() ;
-    int n = b.size() ;
-    int len = m + n - 1 ;
-    std::vector<REAL> c(len) ;
-    std::fill( c.begin(),c.end(),0) ;
-    for ( int k = 0 ; k < len ; k++ )
-    {
-        int start_idx = max(0,k-n+1) ;
-        int stop_idx = min(k,m-1) ;
-        for (int j = start_idx ; j <= stop_idx ; j++ )
-        {
-            c[k] += a[j]*b[k-j] ;
-        }
-    }
-    return c ;
-}
-
-/// wrap an angular value to the range [-pi,pi]
-__host__ __device__ REAL
-wrapAngle(REAL a)
-{
-    REAL remainder = fmod(a, REAL(2*M_PI)) ;
-    if ( remainder > M_PI )
-        remainder -= 2*M_PI ;
-    else if ( remainder < -M_PI )
-        remainder += 2*M_PI ;
-    return remainder ;
-}
-
-/// device function for summations by parallel reduction in shared memory
-/*!
-  * Implementation based on NVIDIA whitepaper found at:
-  * http://developer.download.nvidia.com/compute/cuda/1_1/Website/projects/reduction/doc/reduction.pdf
-  *
-  * Result is stored in sdata[0]
-  \param sdata pointer to shared memory array
-  \param mySum summand loaded by the thread
-  \param tid thread index
-  */
-__device__ void
-sumByReduction( volatile REAL* sdata, REAL mySum, const unsigned int tid )
-{
-    sdata[tid] = mySum;
-    __syncthreads();
-
-    // do reduction in shared mem
-    if (tid < 128) { sdata[tid] = mySum = mySum + sdata[tid + 128]; } __syncthreads();
-    if (tid <  64) { sdata[tid] = mySum = mySum + sdata[tid +  64]; } __syncthreads();
-
-    if (tid < 32)
-    {
-        sdata[tid] = mySum = mySum + sdata[tid + 32];
-        sdata[tid] = mySum = mySum + sdata[tid + 16];
-        sdata[tid] = mySum = mySum + sdata[tid +  8];
-        sdata[tid] = mySum = mySum + sdata[tid +  4];
-        sdata[tid] = mySum = mySum + sdata[tid +  2];
-        sdata[tid] = mySum = mySum + sdata[tid +  1];
-    }
-    __syncthreads() ;
-}
-
-/// device function for products by parallel reduction in shared memory
-/*!
-  * Implementation based on NVIDIA whitepaper found at:
-  * http://developer.download.nvidia.com/compute/cuda/1_1/Website/projects/reduction/doc/reduction.pdf
-  *
-  * Result is stored in sdata[0]
-  \param sdata pointer to shared memory array
-  \param my_factor factor loaded by the thread
-  \param tid thread index
-  */
-__device__ void
-productByReduction( volatile REAL* sdata, REAL my_factor, const unsigned int tid )
-{
-    sdata[tid] = my_factor;
-    __syncthreads();
-
-    // do reduction in shared mem
-    if (tid < 128) { sdata[tid] = my_factor = my_factor * sdata[tid + 128]; } __syncthreads();
-    if (tid <  64) { sdata[tid] = my_factor = my_factor * sdata[tid +  64]; } __syncthreads();
-
-    if (tid < 32)
-    {
-        sdata[tid] = my_factor = my_factor * sdata[tid + 32];
-        sdata[tid] = my_factor = my_factor * sdata[tid + 16];
-        sdata[tid] = my_factor = my_factor * sdata[tid +  8];
-        sdata[tid] = my_factor = my_factor * sdata[tid +  4];
-        sdata[tid] = my_factor = my_factor * sdata[tid +  2];
-        sdata[tid] = my_factor = my_factor * sdata[tid +  1];
-    }
-    __syncthreads() ;
-}
-
-/// device function for finding max value by parallel reduction in shared memory
-/*!
-  * Implementation based on NVIDIA whitepaper found at:
-  * http://developer.download.nvidia.com/compute/cuda/1_1/Website/projects/reduction/doc/reduction.pdf
-  *
-  * Result is stored in sdata[0]. Other values in the array are garbage.
-  \param sdata pointer to shared memory array
-  \param val value loaded by the thread
-  \param tid thread index
-  */
-__device__ void
-maxByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
-{
-    sdata[tid] = val ;
-    __syncthreads();
-
-    // do reduction in shared mem
-    if (tid < 128) { sdata[tid] = val = fmax(sdata[tid+128],val) ; } __syncthreads();
-    if (tid <  64) { sdata[tid] = val = fmax(sdata[tid+64],val) ; } __syncthreads();
-
-    if (tid < 32)
-    {
-        sdata[tid] = val = fmax(sdata[tid+32],val) ;
-        sdata[tid] = val = fmax(sdata[tid+16],val) ;
-        sdata[tid] = val = fmax(sdata[tid+8],val) ;
-        sdata[tid] = val = fmax(sdata[tid+4],val) ;
-        sdata[tid] = val = fmax(sdata[tid+2],val) ;
-        sdata[tid] = val = fmax(sdata[tid+1],val) ;
-    }
-    __syncthreads() ;
-}
-
-/// return the closest symmetric positve definite matrix for 2x2 input
-__device__ void
-makePositiveDefinite( REAL A[4] )
-{
-    // eigenvalues:
-    REAL detA = A[0]*A[3] + A[1]*A[2] ;
-    // check if already positive definite
-    if ( detA > 0 && A[0] > 0 )
-    {
-        A[1] = (A[1] + A[2])/2 ;
-        A[2] = A[1] ;
-        return ;
-    }
-    REAL trA = A[0] + A[3] ;
-    REAL trA2 = trA*trA ;
-    REAL eval1 = 0.5*trA + 0.5*sqrt( trA2 - 4*detA ) ;
-    REAL eval2 = 0.5*trA - 0.5*sqrt( trA2 - 4*detA ) ;
-
-    // eigenvectors:
-    REAL Q[4] ;
-    if ( fabs(A[1]) > 0 )
-    {
-        Q[0] = eval1 - A[3] ;
-        Q[1] = A[1] ;
-        Q[2] = eval2 - A[3] ;
-        Q[3] = A[1] ;
-    }
-    else if ( fabs(A[2]) > 0 )
-    {
-        Q[0] = A[2] ;
-        Q[1] = eval1 - A[0] ;
-        Q[2] = A[2] ;
-        Q[3] = eval2 - A[0] ;
-    }
-    else
-    {
-        Q[0] = 1 ;
-        Q[1] = 0 ;
-        Q[2] = 0 ;
-        Q[3] = 1 ;
-    }
-
-    // make eigenvalues positive
-    if ( eval1 < 0 )
-        eval1 = DBL_EPSILON ;
-    if ( eval2 < 0 )
-        eval2 = DBL_EPSILON ;
-
-    // compute the approximate matrix
-    A[0] = Q[0]*Q[0]*eval1 + Q[2]*Q[2]*eval2 ;
-    A[1] = Q[0]*eval1*Q[1] + Q[2]*eval2*Q[3] ;
-    A[2] = A[1] ;
-    A[3] = Q[1]*Q[1]*eval1 + Q[3]*Q[3]*eval2 ;
-}
-
-/// compute the Mahalanobis distance between two Gaussians
-__device__ REAL
-computeMahalDist(Gaussian2D a, Gaussian2D b)
-{
-    REAL innov[2] ;
-    REAL sigma[4] ;
-    REAL detSigma ;
-    REAL sigmaInv[4] = {1,0,0,1} ;
-    innov[0] = a.mean[0] - b.mean[0] ;
-    innov[1] = a.mean[1] - b.mean[1] ;
-//    sigma[0] = a.cov[0] + b.cov[0] ;
-//    sigma[1] = a.cov[1] + b.cov[1] ;
-//    sigma[2] = a.cov[2] + b.cov[2] ;
-//    sigma[3] = a.cov[3] + b.cov[3] ;
-//    sigma[0] = a.cov[0] ;
-//    sigma[1] = a.cov[1] ;
-//    sigma[2] = a.cov[2] ;
-//    sigma[3] = a.cov[3] ;
-    sigma[0] = b.cov[0] ;
-    sigma[1] = b.cov[1] ;
-    sigma[2] = b.cov[2] ;
-    sigma[3] = b.cov[3] ;
-    detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
-//	detSigma = a.cov[0]*a.cov[3] - a.cov[1]*a.cov[2] ;
-    if (detSigma > FLT_MIN)
-    {
-//		sigmaInv[0] = a.cov[3]/detSigma ;
-//		sigmaInv[1] = -a.cov[1]/detSigma ;
-//		sigmaInv[2] = -a.cov[2]/detSigma ;
-//		sigmaInv[3] = a.cov[0]/detSigma ;
-        sigmaInv[0] = sigma[3]/detSigma ;
-        sigmaInv[1] = -sigma[1]/detSigma ;
-        sigmaInv[2] = -sigma[2]/detSigma ;
-        sigmaInv[3] = sigma[0]/detSigma ;
-    }
-    return  innov[0]*innov[0]*sigmaInv[0] +
-            innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
-            innov[1]*innov[1]*sigmaInv[3] ;
-}
-
-/// Compute the Hellinger distance between two Gaussians
-__device__ REAL
-computeHellingerDist( Gaussian2D a, Gaussian2D b)
-{
-    REAL innov[2] ;
-    REAL sigma[4] ;
-    REAL detSigma ;
-    REAL sigmaInv[4] = {1,0,0,1} ;
-    REAL dist ;
-    innov[0] = a.mean[0] - b.mean[0] ;
-    innov[1] = a.mean[1] - b.mean[1] ;
-    sigma[0] = a.cov[0] + b.cov[0] ;
-    sigma[1] = a.cov[1] + b.cov[1] ;
-    sigma[2] = a.cov[2] + b.cov[2] ;
-    sigma[3] = a.cov[3] + b.cov[3] ;
-    detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
-    if (detSigma > FLT_MIN)
-    {
-        sigmaInv[0] = sigma[3]/detSigma ;
-        sigmaInv[1] = -sigma[1]/detSigma ;
-        sigmaInv[2] = -sigma[2]/detSigma ;
-        sigmaInv[3] = sigma[0]/detSigma ;
-    }
-    REAL epsilon = -0.25*
-            (innov[0]*innov[0]*sigmaInv[0] +
-             innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
-             innov[1]*innov[1]*sigmaInv[3]) ;
-
-    // determinant of half the sum of covariances
-    detSigma /= 4 ;
-    dist = 1/detSigma ;
-
-    // product of covariances
-    sigma[0] = a.cov[0]*b.cov[0] + a.cov[2]*b.cov[1] ;
-    sigma[1] = a.cov[1]*b.cov[0] + a.cov[3]*b.cov[1] ;
-    sigma[2] = a.cov[0]*b.cov[2] + a.cov[2]*b.cov[3] ;
-    sigma[3] = a.cov[1]*b.cov[2] + a.cov[3]*b.cov[3] ;
-    detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
-    dist *= sqrt(detSigma) ;
-    dist = 1 - sqrt(dist)*exp(epsilon) ;
-    return dist ;
-}
-
-/// a nan-safe logarithm
-__device__ __host__
-REAL safeLog( REAL x )
-{
-    if ( x <= 0 )
-        return LOG0 ;
-    else
-        return log(x) ;
-}
 
 /// host-side log-sum-exponent for STL vector of doubles
 double logSumExp( vector<double>log_terms )
@@ -905,6 +631,19 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
         particles.weights = weights_predict ;
         particles.cardinalities = cardinalities_predict ;
         particles.nParticles = nPredict ;
+    }
+
+    // map features prediction using constant position model
+    for (int n = 0 ; n < config.nParticles ; n++ )
+    {
+        int n_features = particles.maps[n].size() ;
+        for ( int j = 0 ; j < n_features ; j++ )
+        {
+            REAL vx = randn()*config.stdVx ;
+            REAL vy = randn()*config.stdVy ;
+            particles.maps[n][j].cov[0] += vx*config.dt ;
+            particles.maps[n][j].cov[3] += vy*config.dt ;
+        }
     }
 
     // log time
@@ -1786,7 +1525,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 map_idx = p + blockIdx.x ;
                 predict_offset = map_offsets[map_idx] ;
                 update_offset = predict_offset*(n_measure+1) +
-                        map_idx*pow(REAL(n_measure),2);
+                        map_idx*n_measure ;
                 n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
                 n_update = (n_features+n_measure)*(n_measure+1) ;
                 pose = poses[map_idx] ;
@@ -1847,8 +1586,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     REAL theta = pose.ptheta + z.bearing ;
                     REAL dx = z.range*cos(theta) ;
                     REAL dy = z.range*sin(theta) ;
-                    feature.mean[0] = pose.px + dx ;
-                    feature.mean[1] = pose.py + dy ;
+
                     // birth jacobian, not Kalman gain
                     // (re-purposing variable "K")
                     K[0] = dx/z.range ;
@@ -1857,15 +1595,19 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     K[3] = dx ;
                     REAL var_range = pow(dev_config.stdRange*dev_config.birthNoiseFactor,2) ;
                     REAL var_bearing = pow(dev_config.stdBearing*dev_config.birthNoiseFactor,2) ;
-                    // covariance of newborn feature = KRK'
-                    feature.cov[0] = pow(K[0],2)*var_range +
+
+                    // save birth terms to updated features array
+                    updateIdx = update_offset + n_features*n_measure + z_idx ;
+                    updated_features[updateIdx].weight = dev_config.birthWeight ;
+                    updated_features[updateIdx].mean[0] = pose.px + dx ;
+                    updated_features[updateIdx].mean[1] = pose.py + dy ;
+                    updated_features[updateIdx].cov[0] = pow(K[0],2)*var_range +
                             pow(K[2],2)*var_bearing ;
-                    feature.cov[1] = K[0]*K[1]*var_range +
+                    updated_features[updateIdx].cov[1] = K[0]*K[1]*var_range +
                             K[2]*K[3]*var_bearing ;
-                    feature.cov[2] = feature.cov[1] ;
-                    feature.cov[3] = pow(K[1],2)*var_range +
+                    updated_features[updateIdx].cov[2] = feature.cov[1] ;
+                    updated_features[updateIdx].cov[3] = pow(K[1],2)*var_range +
                             pow(K[3],2)*var_bearing ;
-                    feature.weight = dev_config.birthWeight ;
 
                     // compute pre-update components for newborn feature
                     computePreUpdateComponents( pose, feature, K, covUpdate,
@@ -1896,15 +1638,16 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     cardinality_predict += sdata[0] ;
                 __syncthreads() ;
 
+
                 /*
-                 * LOOP THROUGH MEASUREMENTS AND DO UPDATE
+                 * LOOP THROUGH MEASUREMENTS AND DO UPDATE FOR DETECTION TERMS
                  */
                 for (int i = 0 ; i < n_measure ; i++ )
                 {
                     z = Z[i] ;
-                    if ( feature_idx < n_features+n_measure)
+                    if ( feature_idx < n_features)
                     {
-                        updateIdx = update_offset + n_features + i*(n_features+n_measure) + feature_idx ;
+                        updateIdx = update_offset + n_features + i*(n_features) + feature_idx ;
                         // compute innovation
                         innov[0] = z.range - z_predict.range ;
                         innov[1] = wrapAngle( z.bearing - z_predict.bearing ) ;
@@ -2034,10 +1777,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 }
 
                 // add back the offset value from logsumexp, and add clutter
-                // density
+                // density and birth weight
                 sum = exp(safeLog(sum) + val) ;
                 sum += dev_config.clutterDensity ;
-//                sum += dev_config.birthWeight ;
+                sum += dev_config.birthWeight ;
 
                 // put back in log form
                 log_normalizer = safeLog(sum) ;
@@ -2048,22 +1791,32 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 __syncthreads() ;
 
                 // compute final feature weights
-                for ( int j = 0 ; j < (n_features+n_measure) ; j += blockDim.x )
+                for ( int j = 0 ; j < (n_features+1) ; j += blockDim.x )
                 {
                     int feature_idx = j + tid ;
-                    if ( feature_idx < (n_features+n_measure) )
+                    if ( feature_idx < n_features )
                     {
+                        // update detection weight
                         updateIdx = update_offset + n_features + i*(n_features+n_measure) + feature_idx ;
                         weightUpdate = exp(updated_features[updateIdx].weight - log_normalizer) ;
-                        // weight birth features with default birth weight
-                        if (feature_idx > n_features)
-                        {
-                            if (tid - n_features == i)
-                                weightUpdate = dev_config.birthWeight ;
-                            else
-                                weightUpdate = 0 ;
-                        }
                         updated_features[updateIdx].weight = weightUpdate ;
+                        // check if updated feature should be retained for
+                        // GM merging step
+                        if ( weightUpdate >= dev_config.minFeatureWeight)
+                        {
+                            mergedFlags[updateIdx] = false ;
+                        }
+                        else
+                        {
+                            mergedFlags[updateIdx] = true ;
+                        }
+                    }
+                    else if ( feature_idx == n_features )
+                    {
+                        // update birth term weight
+                        updateIdx = update_offset + n_features +
+                                n_features*n_measure + i ;
+                        weightUpdate = updated_features[updateIdx].weight/sum ;
                         // check if updated feature should be retained for
                         // GM merging step
                         if ( weightUpdate >= dev_config.minFeatureWeight)
@@ -2756,7 +2509,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     //
     ///////////////////////////////////////////////////////////////////////////
 
-    int n_update = n_in_range*(n_measure+1) + n_measure*n_measure*nParticles ;
+    int n_update = n_in_range*(n_measure+1) + n_measure*nParticles ;
     DEBUG_VAL(n_update) ;
 
     // allocate device memory
@@ -2982,7 +2735,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
             offset_out += n_out_range2_vec[n] ;
 
             // in-range map for particle n
-            int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure*n_measure ;
+            int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
                                         dev_maps_updated+offset_updated,
                                         n_in_range_n*sizeof(Gaussian2D),
@@ -2995,7 +2748,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
             offset_updated += n_in_range_n ;
             mapSizes[n] = n_out_range2_vec[n] +
                     n_in_range_vec[n]*(n_measure+1) +
-                    n_measure*n_measure ;
+                    n_measure ;
         }
     }
     DEBUG_VAL(combined_size) ;
@@ -3061,9 +2814,9 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                              maps_merged+offset_updated+map_sizes_merged[i]) ;
 //		particles.maps[i].assign( maps_updated+offset_updated,
 //								maps_updated+offset_updated+n_in_range_vec[i]*(n_measure+1) ) ;
-//		DEBUG_VAL(i) ;
-//		DEBUG_VAL(particles.weights[i]) ;
-//		DEBUG_VAL(particle_weights[i]) ;
+                DEBUG_VAL(i) ;
+                DEBUG_VAL(particles.weights[i]) ;
+                DEBUG_VAL(particle_weights[i]) ;
         particles.weights[i] += particle_weights[i]  ;
 //		DEBUG_VAL(particles.weights[i]) ;
 //		if (particles.weights[i] <= 0 )
