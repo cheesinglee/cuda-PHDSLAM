@@ -445,8 +445,9 @@ ParticleSLAM loadParticles(std::string filename)
     return particles ;
 }
 
+template<class GaussianType>
 void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
-				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
+                                vector<GaussianType> expectedMap, vector<REAL> cn_estimate, int t)
 {
         // create the filename
         std::ostringstream oss ;
@@ -459,15 +460,23 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
                     << expectedPose.ptheta << " " << expectedPose.vx << " "
                     << expectedPose.vy << " " << expectedPose.vtheta << " "
                     << endl ;
-        for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
+        if (expectedMap.size() > 0)
         {
-            stateFile << expectedMap[n].weight << " "
-                        << expectedMap[n].mean[0] << " "
-                        << expectedMap[n].mean[1] << " "
-                        << expectedMap[n].cov[0] << " "
-                        << expectedMap[n].cov[1] << " "
-                        << expectedMap[n].cov[2] << " "
-                        << expectedMap[n].cov[3] << " " ;
+            // get dimensionality of map
+            int len_cov = sizeof(expectedMap[0].cov)/sizeof(REAL) ;
+            int len_mean = sqrt(len_cov) ;
+            for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
+            {
+                stateFile << expectedMap[n].weight << " " ;
+                for (int i = 0 ; i < len_mean ; i++ )
+                {
+                    stateFile << expectedMap[n].mean[i] << " " ;
+                }
+                for (int i = 0 ; i < len_cov ; i++ )
+                {
+                    stateFile << expectedMap[n].cov[i] << " " ;
+                }
+            }
         }
         stateFile << endl ;
 
@@ -625,8 +634,10 @@ void loadConfig(const char* filename)
             ("b", value<REAL>(&config.b)->default_value(0), "y-distance from centerline to sensor")
             ("std_encoder", value<REAL>(&config.stdEncoder)->default_value(0), "Std. deviation of velocity noise")
             ("std_alpha", value<REAL>(&config.stdAlpha)->default_value(0), "Std. deviation of steering angle noise")
-            ("std_vx", value<REAL>(&config.stdEncoder)->default_value(0), "Std. deviation of x process noise in constant position model")
-            ("std_vy", value<REAL>(&config.stdEncoder)->default_value(0), "Std. deviation of y process noise in constant position model")
+            ("std_vx", value<REAL>(&config.stdVx)->default_value(0), "Std. deviation of x process noise in constant position model")
+            ("std_vy", value<REAL>(&config.stdVy)->default_value(0), "Std. deviation of y process noise in constant position model")
+            ("cov_vx_birth", value<REAL>(&config.covVxBirth)->default_value(0), "Birth covariance of x velocity in dynamic targets")
+            ("cov_vy_birth", value<REAL>(&config.covVyBirth)->default_value(0), "Birth covariance of y velocity in dynamic targets")
             ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
             ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
             ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
@@ -736,7 +747,7 @@ int main(int argc, char *argv[])
         nSteps = config.maxSteps ;
 
     // initialize particles
-    ParticleSLAM particles( config.nParticles ) ;
+    ParticleSLAM<Gaussian4D> particles( config.nParticles ) ;
     for (int n = 0 ; n < config.nParticles ; n++ )
     {
         particles.states[n].px = config.x0 ;
@@ -776,7 +787,7 @@ int main(int argc, char *argv[])
     measurementSet ZPrev ;
     ParticleSLAM particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
-    gaussianMixture expectedMap ;
+    vector<Gaussian4D> expectedMap ;
     vector<REAL> cn_estimate ;
     REAL nEff ;
     timeval start, stop ;

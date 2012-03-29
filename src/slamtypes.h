@@ -101,6 +101,12 @@ typedef struct {
     REAL weight ;
 } Gaussian3D ;
 
+typedef struct {
+    REAL cov[16] ;
+    REAL mean[4] ;
+    REAL weight ;
+} Gaussian4D ;
+
 //typedef struct{
 //    REAL* cov00 ;
 //    REAL* cov01 ;
@@ -140,9 +146,13 @@ typedef struct{
     REAL clutterDensity ;
     REAL pd ;
 
-    // constnat position process noise
+    // constant position process noise
     REAL stdVx ;
     REAL stdVy ;
+
+    // birth covariance for unobserved velocity terms
+    REAL covVxBirth ;
+    REAL covVyBirth ;
 
     int nParticles ;
 	int nPredictParticles ;
@@ -183,12 +193,13 @@ typedef struct{
 typedef vector<Gaussian2D> gaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
 
+template<class GaussianType>
 class ParticleSLAM{
 public:
     int nParticles ;
     vector<double> weights ;
     vector<ConstantVelocityState> states ;
-    vector<gaussianMixture> maps ;
+    vector<vector<GaussianType> > maps ;
     vector< vector<REAL> > cardinalities ;
     vector<char> compatibleZ ;
     vector<REAL> cardinality_birth ;

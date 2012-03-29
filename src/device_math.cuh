@@ -210,15 +210,41 @@ cholesky( REAL*A, REAL* L, int size)
     }
 }
 
-/// invert_matrix
-/*!
-  * Invert a symmetric, positive definite matrix using Cholesky Factorization,
-  * via the Cholesky–Banachiewicz algorithm.
-  */
-__device__ void
-invertMatrix( REAL* A, REAL* A_inv, int size)
+/// determinant of a 4x4 matrix
+__device__ REAL
+det4(REAL *A)
 {
+    REAL det=0;
+    det+=A[0]*((A[5]*A[10]*A[15]+A[9]*A[14]*A[7]+A[13]*A[6]*A[11])-(A[5]*A[14]*A[11]-A[9]*A[6]*A[15]-A[13]*A[10]*A[7]));
+    det+=A[4]*((A[1]*A[14]*A[11]+A[9]*A[2]*A[15]+A[13]*A[10]*A[3])-(A[1]*A[10]*A[15]-A[9]*A[14]*A[3]-A[13]*A[2]*A[11]));
+    det+=A[8]*((A[1]*A[6]*A[15]+A[5]*A[14]*A[3]+A[13]*A[2]*A[7])-(A[1]*A[14]*A[7]-A[5]*A[2]*A[15]-A[13]*A[6]*A[3]));
+    det+=A[12]*((A[1]*A[10]*A[7]+A[5]*A[2]*A[12]+A[9]*A[10]*A[3])-(A[1]*A[10]*A[12]-A[5]*A[10]*A[3]-A[9]*A[2]*A[7]));
+    return det ;
+}
 
+/// invert a 4x4 matrix
+__device__ void
+invert_matrix4( REAL *A, REAL *A_inv)
+{
+    double det=det4(A);
+    A_inv[0]=A[5]*A[10]*A[15]+A[9]*A[14]*A[7]+A[13]*A[6]*A[11]-A[5]*A[14]*A[11]-A[9]*A[6]*A[15]-A[13]*A[10]*A[7];
+    A_inv[4]=A[4]*A[14]*A[11]+A[8]*A[6]*A[15]+A[12]*A[10]*A[7]-A[4]*A[10]*A[15]-A[8]*A[14]*A[7]-A[12]*A[6]*A[11];
+    A_inv[8]=A[4]*A[9]*A[15]+A[8]*A[13]*A[7]+A[12]*A[5]*A[11]-A[4]*A[13]*A[11]-A[8]*A[5]*A[15]-A[12]*A[9]*A[7];
+    A_inv[12]=A[4]*A[13]*A[10]+A[8]*A[5]*A[14]+A[12]*A[9]*A[6]-A[4]*A[9]*A[14]-A[8]*A[13]*A[6]-A[12]*A[5]*A[10];
+    A_inv[1]=A[1]*A[14]*A[11]+A[9]*A[2]*A[15]+A[13]*A[10]*A[3]-A[1]*A[10]*A[15]-A[9]*A[14]*A[3]-A[13]*A[2]*A[11];
+    A_inv[5]=A[0]*A[10]*A[15]+A[8]*A[14]*A[3]+A[12]*A[2]*A[11]-A[0]*A[14]*A[11]-A[8]*A[2]*A[15]-A[12]*A[10]*A[3];
+    A_inv[9]=A[0]*A[13]*A[11]+A[8]*A[1]*A[15]+A[12]*A[9]*A[3]-A[0]*A[9]*A[15]-A[8]*A[13]*A[3]-A[12]*A[1]*A[11];
+    A_inv[13]=A[0]*A[9]*A[14]+A[8]*A[13]*A[2]+A[12]*A[1]*A[10]-A[0]*A[13]*A[10]-A[8]*A[1]*A[14]-A[12]*A[9]*A[2];
+    A_inv[2]=A[1]*A[6]*A[15]+A[5]*A[14]*A[3]+A[13]*A[2]*A[7]-A[1]*A[14]*A[7]-A[5]*A[2]*A[15]-A[13]*A[6]*A[3];
+    A_inv[6]=A[0]*A[14]*A[7]+A[4]*A[2]*A[15]+A[12]*A[6]*A[3]-A[0]*A[6]*A[15]-A[4]*A[14]*A[3]-A[12]*A[2]*A[7];
+    A_inv[10]=A[0]*A[5]*A[15]+A[4]*A[13]*A[3]+A[12]*A[1]*A[7]-A[0]*A[13]*A[7]-A[4]*A[1]*A[15]-A[12]*A[5]*A[3];
+    A_inv[14]=A[0]*A[13]*A[6]+A[4]*A[1]*A[14]+A[12]*A[5]*A[2]-A[0]*A[5]*A[14]-A[4]*A[13]*A[2]-A[12]*A[1]*A[6];
+    A_inv[3]=A[1]*A[10]*A[7]+A[5]*A[2]*A[11]+A[9]*A[6]*A[3]-A[1]*A[6]*A[11]-A[5]*A[10]*A[3]-A[9]*A[2]*A[7];
+    A_inv[7]=A[0]*A[6]*A[11]+A[4]*A[10]*A[3]+A[8]*A[2]*A[7]-A[0]*A[10]*A[7]-A[4]*A[2]*A[11]-A[8]*A[6]*A[3];
+    A_inv[11]=A[0]*A[9]*A[7]+A[4]*A[1]*A[11]+A[8]*A[5]*A[3]-A[0]*A[5]*A[11]-A[4]*A[9]*A[3]-A[8]*A[1]*A[7];
+    A_inv[15]=A[0]*A[5]*A[10]+A[4]*A[9]*A[2]+A[8]*A[1]*A[6]-A[0]*A[9]*A[6]-A[4]*A[1]*A[10]-A[8]*A[5]*A[2];
+    for (int i = 0 ; i<16 ; i++)
+        A_inv[i] /= det ;
 }
 
 /// device function for summations by parallel reduction in shared memory
@@ -315,6 +341,105 @@ maxByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
         sdata[tid] = val = fmax(sdata[tid+1],val) ;
     }
     __syncthreads() ;
+}
+
+typedef struct
+{
+    REAL std_accx ;
+    REAL std_accy ;
+    __device__ __host__ Gaussian4D
+    compute_prediction(Gaussian4D state_prior, REAL dt)
+    {
+        Gaussian4D state_predict ;
+        // predicted weight
+        state_predict.weight = state_prior.weight ;
+
+        // predicted mean
+        state_predict.mean[0] = state_prior.mean[0] + dt*state_prior.mean[2] ;
+        state_predict.mean[1] = state_prior.mean[1] + dt*state_prior.mean[3] ;
+        state_predict.mean[2] = state_prior.mean[2] ;
+        state_predict.mean[3] = state_prior.mean[3] ;
+
+        // predicted covariance
+        REAL var_x = pow(std_accx,2) ;
+        REAL var_y = pow(std_accy,2) ;
+        state_predict.cov[0] = state_prior.cov[0] + state_prior.cov[8] * dt
+                + dt * (state_prior.cov[2] + state_prior.cov[10] * dt)
+                + pow(dt, 0.4e1) *var_x / 0.4e1;
+        state_predict.cov[4] = state_prior.cov[4] + state_prior.cov[12] * dt
+                + dt * (state_prior.cov[6] + state_prior.cov[14] * dt);
+        state_predict.cov[8] = state_prior.cov[8] + state_prior.cov[10] * dt
+                + pow(dt, 0.3e1) *var_x / 0.2e1;
+        state_predict.cov[12] = state_prior.cov[12] + state_prior.cov[14] * dt;
+        state_predict.cov[1] = state_prior.cov[1] + state_prior.cov[9] * dt
+                + dt * (state_prior.cov[3] + state_prior.cov[11] * dt);
+        state_predict.cov[5] = state_prior.cov[5] + state_prior.cov[13] * dt
+                + dt * (state_prior.cov[7] + state_prior.cov[15] * dt)
+                + pow(dt, 0.4e1) * var_y / 0.4e1;
+        state_predict.cov[9] = state_prior.cov[9] + state_prior.cov[11] * dt;
+        state_predict.cov[13] = state_prior.cov[13] + state_prior.cov[15] * dt
+                + pow(dt, 0.3e1) * var_y / 0.2e1;
+        state_predict.cov[2] = state_prior.cov[2] + state_prior.cov[10] * dt
+                + pow(dt, 0.3e1) *var_x / 0.2e1;
+        state_predict.cov[6] = state_prior.cov[6] + state_prior.cov[14] * dt;
+        state_predict.cov[10] = state_prior.cov[10] +var_x * dt * dt;
+        state_predict.cov[14] = state_prior.cov[14];
+        state_predict.cov[3] = state_prior.cov[3] + state_prior.cov[11] * dt;
+        state_predict.cov[7] = state_prior.cov[7] + state_prior.cov[15] * dt
+                + pow(dt, 0.3e1) * var_y / 0.2e1;
+        state_predict.cov[11] = state_prior.cov[11];
+        state_predict.cov[15] = state_prior.cov[15] + var_y * dt * dt;
+
+        return state_predict ;
+    }
+} ConstantVelocityMotionModel ;
+
+typedef struct
+{
+    REAL std_vx ;
+    REAL std_vy ;
+    __device__ __host__ Gaussian2D
+    compute_prediction(Gaussian2D state_prior, REAL dt)
+    {
+        Gaussian2D state_predict ;
+        // predicted weight
+        state_predict.weight = state_prior.weight ;
+
+        // predicted mean
+        state_predict.mean[0] = state_prior.mean[0] ;
+        state_predict.mean[1] = state_prior.mean[1] ;
+
+        // predicted covariance
+        state_predict.cov[0] = state_prior.cov[0] + pow(std_vx*dt,2) ;
+        state_predict.cov[1] = state_prior.cov[1] ;
+        state_predict.cov[2] = state_prior.cov[2] ;
+        state_predict.cov[3] = state_prior.cov[3] + pow(std_vy*dt,2) ;
+
+        return state_predict ;
+    }
+} ConstantPositionMotionModel ;
+
+template<class GaussianType>
+__device__ __host__
+void copy_gaussians(GaussianType* src, GaussianType* dest)
+{
+    // determine the size of the covariance matrix
+    int len_cov = sizeof(src->cov)/sizeof(REAL) ;
+#ifdef __CUDA_ARCH__
+    int len_mean = sqrtf(len_cov) ;
+#else
+    int len_mean = sqrt(len_cov) ;
+#endif
+    // copy mean and covariance
+    for (int i = 0 ; i < len_cov ; i++ )
+    {
+        if ( i < len_mean )
+            dest->mean[i] = src->mean[i] ;
+        dest->cov[i] = src->cov[i] ;
+    }
+
+    // copy weight
+    dest->weight = src->weight ;
 }
 
 

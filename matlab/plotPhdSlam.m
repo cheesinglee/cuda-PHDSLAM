@@ -6,7 +6,7 @@ if ( path == 0 )
     return 
 end
 
-[fname,pname] = uigetfile('*.mat','Choose simulation data file') ;
+[fname,pname] = uigetfile('../data/*.mat','Choose simulation data file') ;
 if ( fname ~= 0 )
     simdata_filename = [pname,filesep,fname] ;
     load(simdata_filename)
@@ -25,10 +25,12 @@ expectedCovs = cell(nSteps,1) ;
 expectedWeights = cell(nSteps,1) ;
 expectedTraj = zeros(6,nSteps) ;
 estimatedCn = cell(nSteps,1) ;
+particleWeights = [] ;
+% nSteps = 400 ;
 for i = 1:nSteps
-            disp([num2str(i),'/',num2str(nSteps)]) 
+    disp([num2str(i),'/',num2str(nSteps)]) 
     matfilename = [path,filesep,'state_estimate',num2str(i-1),'.mat'] ;
-    txtfilename = [path,filesep,'state_estimate',num2str(i-1),'.log'] ;
+    txtfilename = [path,filesep,'state_estimate',num2str(i-1,'%05d'),'.log'] ;
     if exist(matfilename,'file') 
     %     disp( particleFilename )
         load(matfilename) ;
@@ -57,10 +59,12 @@ for i = 1:nSteps
         map_line = fgetl(fid) ;
         weights_line = fgetl(fid) ;
         particles_line = fgetl(fid) ;
+%         cn_line = fgetl(fid) ;
         
         pose_cell = textscan(pose_line,'%f %f %f %f %f %f','CollectOutput',true) ;
         particles_cell = textscan(particles_line,'%f %f %f %f %f %f') ;
         weights_cell = textscan(weights_line,'%f') ;
+%         cn_cell = textscan(cn_line,'%f') ;
         if nParticles < 0
             nParticles = numel(weights_cell{1}) ;
             particleWeights = zeros(nSteps,nParticles) ;
@@ -92,21 +96,28 @@ for i = 1:nSteps
         expectedMeans{i} = map_means ;
         expectedCovs{i} = map_covs ;
         expectedWeights{i} = map_weights ;
+%         estimatedCn{i} = cn_cell{1} ;
         fclose(fid) ;
     end
 end
 
 %% plot
-% avi = avifile('1cluster.avi') ;
-min_weight = 0.33 ;
+close all
+min_weight = 0.25 ;
 figure(1)
-set(gcf,'Position',[100,100,1280,720]) ;
+set(gcf,'Position',[100,100,800,600]) ;
+subplot(2,4,[1,2,5,6])
+% h_ellipses = plot(0,0,'b') ;
+% h_particles = plot(0,0,'.') ;
+hold on
+grid on
+axis equal
 N = 10 ;
-draw_rate = 10 ;
-for i = 1:nSteps-1
-    if mod(i,draw_rate) ~= 0
-        continue
-    end
+draw_rate = 1 ;
+avi_frames = struct(getframe(gcf)) ;
+avi_frames = repmat(avi_frames,1,ceil(nSteps/draw_rate)) ;
+frame_counter = 1 ;
+for i = 1:draw_rate:nSteps
     set(0,'CurrentFigure',1) ;
     weights = exp(particleWeights(i,:)) ;
     poses = squeeze(particlePoses(i,:,:))' ;
@@ -117,12 +128,14 @@ for i = 1:nSteps-1
     mapMeans = expectedMeans{i} ;
     mapCovs = expectedCovs{i} ;
     nFeatures = size(mapMeans,2) ;
-    weight_idx = mapWeights > min_weight ;
     weight_sum = sum(mapWeights) ;
     [sorted, idx] = sort(mapWeights,'descend') ;
     idx = idx(1:round(weight_sum)) ;
-    pp = makeCovEllipses( mapMeans(:,idx), mapCovs(:,:,idx), N ) ;
-%     ppGold = makeCovEllipses( expectedMapsGold(i).means, expectedMapsGold(i).covs,N ) ;
+%     idx = mapWeights > min_weight ;
+    pp = make_cov_ellipses( mapMeans(:,idx)', mapCovs(:,:,idx), N ) ;
+%     ppGold = makeCovEllipses( expectedMapsGold(i).means,
+%     expectedMapsGold(i).covs,N ) ;
+
     clf 
     subplot(2,4,[1,2,5,6])
     hold on
@@ -132,10 +145,43 @@ for i = 1:nSteps-1
     plot(expectedTraj(1,i),expectedTraj(2,i),'dr','Markersize',8) ;
     plot( expectedTraj(1,1:i), expectedTraj(2,1:i), 'r--' ) ;
     plot(poses(1,:),poses(2,:),'.') ;
+%     set(h_particles,'xdata',poses(1,:),'ydata',poses(2,:)) ;
+%     set(h_ellipses,'xdata',pp(1,:),'ydata',pp(2,:)) ;
     if (exist('sim','var'))
         plot( sim.traj(1,:), sim.traj(2,:), 'k' )
+%         plot( sim.map(1,:),sim.map(2,:),'k*')
+%         dynamic_features_i = sim.feature_traj(:,i,:) ;
+%         dynamic_features_i = reshape(dynamic_features_i,2,[]) ;
+%         plot( dynamic_features_i(1,:),dynamic_features_i(2,:),'r*') ;
         plot( sim.groundTruth{i}.loc(1,:), sim.groundTruth{i}.loc(2,:),'k*')
     end
+    
+    % plot measurements
+    if (exist('sim','var'))
+        Zi = sim.z_noised{i} ;
+        r = Zi(1,:) ;
+        b = Zi(2,:) + sim.traj(3,i) ;
+        dx = r.*cos(b) ;
+        dy = r.*sin(b) ;
+        x = sim.traj(1,i) + dx ;
+        y = sim.traj(2,i) + dy ;
+        z_lines = zeros(2,numel(x)*2) ;
+        z_lines(:,1:2:end) = [x;y] ;
+        z_lines(:,2:2:end) = repmat(sim.traj(1:2,i),[1,numel(x)]) ;
+%         Zki = sim.data(i).measurementsClutter ;
+%         r = Zki(1,:) ;
+%         b = Zki(2,:) + sim.traj(3,i) ;
+%         dx = r.*cos(b) ;
+%         dy = r.*sin(b) ;
+%         x = sim.traj(1,i) + dx ;
+%         y = sim.traj(2,i) + dy ;
+%         z_lines_clutter = zeros(2,numel(x)*2) ;
+%         z_lines_clutter(:,1:2:end) = [x;y] ;
+%         z_lines_clutter(:,2:2:end) = repmat(sim.traj(1:2,i),[1,numel(x)]) ;
+        plot(z_lines(1,:),z_lines(2,:),'g-.') 
+%         plot(z_lines_clutter(1,:),z_lines_clutter(2,:),'r-.') 
+    end
+    
     title(num2str(i))
 %     xlim([-10 60])
 %     ylim([-10 60])
@@ -162,29 +208,28 @@ for i = 1:nSteps-1
     axis equal 
     grid on
     title('Particle Weights') 
+    
     subplot(2,4,4)
+    n_eff = 1/sum(weights.^2)/nParticles ;
     bar(weights,'EdgeColor','none') ;
     ylim([0,5/nParticles])
+    title(num2str(n_eff))
+    
     subplot(2,4,[7,8])
-    title('Cardinality')
     cn = estimatedCn{i} ;
-    plot(0:numel(cn)-1,cn,'.') ;
+    plot(0:numel(cn)-1,exp(cn),'.') ;
     ylim([0,1]) ;
+    title(['Cardinality, weightsum = ',num2str(weight_sum)])
     drawnow
-%     avi = addframe( avi,getframe(gcf) ) ;
-%     subplot(1,3,3)
-%     hold on
-%     plot(ppGold(1,:),ppGold(2,:),'b')
-%     plot(expectedTraj(1,i),expectedTraj(2,i),'dr','Markersize',8) ;
-%     plot( expectedTraj(1,1:i), expectedTraj(2,1:i), 'r--' ) ;
-%     plot(poses(1,:),poses(2,:),'.') ;
-%     plot( trajTrue(1,:), trajTrue(2,:), 'k' )
-%     plot( sim.groundTruth{i}.loc(1,:), sim.groundTruth{i}.loc(2,:),'k*')
-%     title(num2str(i))
-%     xlim([-10 60])
-%     ylim([-10 60])
-%     axis square
-%     drawnow 
-%     pause(0.05) ;
+    avi_frames(frame_counter) = getframe(gcf) ;
+    frame_counter = frame_counter + 1 ;
+%     keyboard
 end
+% %%
+% disp('Creating AVI')
+% avi = avifile('sccphd_vp.avi') ;
+% for i = 1:numel(avi_frames)
+%     disp([num2str(i),'/',num2str(numel(avi_frames))])
+%     avi = addframe( avi,avi_frames(i) ) ;
+% end
 % avi = close(avi) ;
