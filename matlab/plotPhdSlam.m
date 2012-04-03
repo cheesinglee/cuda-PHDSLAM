@@ -75,15 +75,27 @@ for i = 1:nSteps
         map_covs = [] ;
         map_weights = [] ;
         if length(map_line) > 0
-            map_cell = textscan(map_line,'%f %f %f %f %f %f %f') ;
+            map_cell = textscan(map_line,'%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f') ;
             map_weights = map_cell{1} ;
             n_features = numel(map_weights) ;
-            map_means = [ map_cell{2}' ; map_cell{3}' ] ;
-            map_covs = zeros(2,2,n_features) ;
-            map_covs(1,1,:) = reshape(map_cell{4},[1,1,n_features]) ;
-            map_covs(2,1,:) = reshape(map_cell{5},[1,1,n_features]) ;
-            map_covs(1,2,:) = reshape(map_cell{6},[1,1,n_features]) ;
-            map_covs(2,2,:) = reshape(map_cell{7},[1,1,n_features]) ;
+            map_means = [ map_cell{2}' ; map_cell{3}' ; map_cell{4}' ; map_cell{5}'] ;
+            map_covs = zeros(4,4,n_features) ;
+            map_covs(1,1,:) = reshape(map_cell{6},[1,1,n_features]) ;
+            map_covs(2,1,:) = reshape(map_cell{7},[1,1,n_features]) ;
+            map_covs(3,1,:) = reshape(map_cell{8},[1,1,n_features]) ;
+            map_covs(4,1,:) = reshape(map_cell{9},[1,1,n_features]) ;
+            map_covs(1,2,:) = reshape(map_cell{10},[1,1,n_features]) ;
+            map_covs(2,2,:) = reshape(map_cell{11},[1,1,n_features]) ;
+            map_covs(3,2,:) = reshape(map_cell{12},[1,1,n_features]) ;
+            map_covs(4,2,:) = reshape(map_cell{13},[1,1,n_features]) ;
+            map_covs(1,3,:) = reshape(map_cell{14},[1,1,n_features]) ;
+            map_covs(2,3,:) = reshape(map_cell{15},[1,1,n_features]) ;
+            map_covs(3,3,:) = reshape(map_cell{16},[1,1,n_features]) ;
+            map_covs(4,3,:) = reshape(map_cell{17},[1,1,n_features]) ;
+            map_covs(1,4,:) = reshape(map_cell{18},[1,1,n_features]) ;
+            map_covs(2,4,:) = reshape(map_cell{19},[1,1,n_features]) ;
+            map_covs(3,4,:) = reshape(map_cell{20},[1,1,n_features]) ;
+            map_covs(4,4,:) = reshape(map_cell{21},[1,1,n_features]) ;
         end
         particleWeights(i,:) = weights_cell{1} ;
         particlePoses(i,:,1) = particles_cell{1} ;
@@ -103,6 +115,7 @@ end
 
 %% plot
 close all
+
 min_weight = 0.25 ;
 figure(1)
 set(gcf,'Position',[100,100,800,600]) ;
@@ -132,7 +145,7 @@ for i = 1:draw_rate:nSteps
     [sorted, idx] = sort(mapWeights,'descend') ;
     idx = idx(1:round(weight_sum)) ;
 %     idx = mapWeights > min_weight ;
-    pp = make_cov_ellipses( mapMeans(:,idx)', mapCovs(:,:,idx), N ) ;
+    pp = make_cov_ellipses( mapMeans(1:2,idx)', mapCovs(1:2,1:2,idx), N ) ;
 %     ppGold = makeCovEllipses( expectedMapsGold(i).means,
 %     expectedMapsGold(i).covs,N ) ;
 
@@ -183,9 +196,9 @@ for i = 1:draw_rate:nSteps
     end
     
     title(num2str(i))
-%     xlim([-10 60])
-%     ylim([-10 60])
     axis equal
+    xlim([-25 25])
+    ylim([-30 30])
     grid on
     subplot(2,4,3)
     hold on
@@ -227,7 +240,7 @@ for i = 1:draw_rate:nSteps
 end
 % %%
 % disp('Creating AVI')
-% avi = avifile('sccphd_vp.avi') ;
+% avi = avifile('scphd_mixed_targets.avi') ;
 % for i = 1:numel(avi_frames)
 %     disp([num2str(i),'/',num2str(numel(avi_frames))])
 %     avi = addframe( avi,avi_frames(i) ) ;
