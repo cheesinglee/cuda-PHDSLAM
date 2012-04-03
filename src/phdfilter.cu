@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <string>
+#include <cstdarg>
 #include "slamtypes.h"
 //#include "slamparams.h"
 #include <cutil.h>
@@ -25,7 +26,7 @@
 #include <fftw3.h>
 #include <assert.h>
 #include <float.h>
-//#include "cuPrintf.cu"
+#include "cuPrintf.cu"
 
 #include "device_math.cuh"
 
@@ -53,45 +54,36 @@
 #endif
 
 //--- Make kernel helper functions externally visible
-extern "C"
 void
 initCphdConstants() ;
 
-extern "C"
+template<class GaussianType>
 void
-phdPredict(ParticleSLAM& particles, AckermanControl control ) ;
+phdPredict(ParticleSLAM<GaussianType>& particles, ... ) ;
 
-extern "C"
+template<class GaussianType>
 void
-phdPredictVp( ParticleSLAM& particles ) ;
+phdPredictVp( ParticleSLAM<GaussianType>& particles ) ;
 
-extern "C"
+
+template<class GaussianType>
+ParticleSLAM<GaussianType>
+phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements) ;
+
+template<class GaussianType>
+ParticleSLAM<GaussianType>
+resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles=-1 ) ;
+
+template<class GaussianType>
 void
-addBirths( ParticleSLAM& particles, measurementSet ZPrev ) ;
+recoverSlamState(ParticleSLAM<GaussianType> particles, ConstantVelocityState& expectedPose,
+        vector<GaussianType>& expectedMap, vector<REAL>& cn_estimate ) ;
 
-extern "C"
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
+void
+setDeviceConfig( const SlamConfig& config ) ;
+//--- End external declarations
 
-extern "C"
-ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int nParticles=-1 ) ;
-
-extern "C"
-void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
-        gaussianMixture& expectedMap, vector<REAL>& cn_estimate ) ;
-
-extern "C"
-void setDeviceConfig( const SlamConfig& config ) ;
-
-extern "C"
-__device__ void
-computePreUpdateComponents( ConstantVelocityState pose,
-                            Gaussian2D feature, REAL* K,
-                            REAL* cov_update, REAL* det_sigma,
-                            REAL* S, REAL* feature_pd,
-                            RangeBearingMeasurement* z_predict ) ;
-
-//extern "C"
+//template<class GaussianType>
 //__host__ __device__ REAL
 //wrapAngle(REAL a) ;
 //--- End external function declaration
@@ -124,7 +116,7 @@ REAL* dev_cn_clutter ;
 
 /// combine all features from all particles into a single STL vector
 template<class GaussianType>
-vector<GaussianType> combineFeatures(ParticleSLAM particles)
+vector<GaussianType> combineFeatures(ParticleSLAM<GaussianType> particles)
 {
     vector<GaussianType> concat ;
     for ( unsigned int n = 0 ; n < particles.nParticles ; n++ )
@@ -132,6 +124,7 @@ vector<GaussianType> combineFeatures(ParticleSLAM particles)
         concat.insert( concat.end(), particles.maps[n].begin(),
                 particles.maps[n].end()) ;
     }
+    return concat ;
 }
 
 /// host-side log-sum-exponent for STL vector of doubles
@@ -306,10 +299,10 @@ computePreUpdateComponentsDynamic( ConstantVelocityState pose,
     REAL sigma[4] ;
     REAL var_range = pow(dev_config.stdRange,2) ;
     REAL var_bearing = pow(dev_config.stdBearing,2) ;
-    sigma[0] = (P[0] * J[0] + J[2] * P[1]) * J[0] + (J[0] * P[2] + P[3] * J[2]) * J[2] + var_range ;
-    sigma[1] = (P[0] * J[1] + J[3] * P[1]) * J[0] + (J[1] * P[2] + P[3] * J[3]) * J[2];
-    sigma[2] = (P[0] * J[0] + J[2] * P[1]) * J[1] + (J[0] * P[2] + P[3] * J[2]) * J[3];
-    sigma[3] = (P[0] * J[1] + J[3] * P[1]) * J[1] + (J[1] * P[2] + P[3] * J[3]) * J[3] + var_bearing ;
+    sigma[0] = J[0] * (P[0] * J[0] + P[4] * J[2]) + J[2] * (P[1] * J[0] + P[5] * J[2]) + var_range;
+    sigma[1] = J[1] * (P[0] * J[0] + P[4] * J[2]) + J[3] * (P[1] * J[0] + P[5] * J[2]);
+    sigma[2] = J[0] * (P[0] * J[1] + P[4] * J[3]) + J[2] * (P[1] * J[1] + P[5] * J[3]);
+    sigma[3] = J[1] * (P[0] * J[1] + P[4] * J[3]) + J[3] * (P[1] * J[1] + P[5] * J[3]) + var_bearing;
 
     // enforce symmetry
     sigma[1] = (sigma[1]+sigma[2])/2 ;
@@ -342,22 +335,22 @@ computePreUpdateComponentsDynamic( ConstantVelocityState pose,
             + P[7] * (J[2] * S[2] + J[3] * S[3]);
 
     // Updated covariance (Joseph Form)
-    cov_update[0] = (1 - K[0] * J[0] - K[4] * J[1]) * (P[0] * (1 - K[0] * J[0] - K[4] * J[1]) + P[4] * (-K[0] * J[2] - K[4] * J[3])) + (-K[0] * J[2] - K[4] * J[3]) * (P[1] * (1 - K[0] * J[0] - K[4] * J[1]) + P[5] * (-K[0] * J[2] - K[4] * J[3])) + var_range *  pow(K[0], 2) + var_bearing *  pow(K[4], 2);
+    cov_update[0] = (1 - K[0] * J[0] - K[4] * J[1]) * (P[0] * (1 - K[0] * J[0] - K[4] * J[1]) + P[4] * (-K[0] * J[2] - K[4] * J[3])) + (-K[0] * J[2] - K[4] * J[3]) * (P[1] * (1 - K[0] * J[0] - K[4] * J[1]) + P[5] * (-K[0] * J[2] - K[4] * J[3])) + var_range *  pow( K[0],  2) + var_bearing *  pow( K[4],  2);
     cov_update[1] = (-K[1] * J[0] - K[5] * J[1]) * (P[0] * (1 - K[0] * J[0] - K[4] * J[1]) + P[4] * (-K[0] * J[2] - K[4] * J[3])) + (1 - K[1] * J[2] - K[5] * J[3]) * (P[1] * (1 - K[0] * J[0] - K[4] * J[1]) + P[5] * (-K[0] * J[2] - K[4] * J[3])) + K[0] * var_range * K[1] + K[4] * var_bearing * K[5];
     cov_update[2] = (-K[2] * J[0] - K[6] * J[1]) * (P[0] * (1 - K[0] * J[0] - K[4] * J[1]) + P[4] * (-K[0] * J[2] - K[4] * J[3])) + (-K[2] * J[2] - K[6] * J[3]) * (P[1] * (1 - K[0] * J[0] - K[4] * J[1]) + P[5] * (-K[0] * J[2] - K[4] * J[3])) + P[2] * (1 - K[0] * J[0] - K[4] * J[1]) + P[6] * (-K[0] * J[2] - K[4] * J[3]) + K[0] * var_range * K[2] + K[4] * var_bearing * K[6];
     cov_update[3] = (-K[3] * J[0] - K[7] * J[1]) * (P[0] * (1 - K[0] * J[0] - K[4] * J[1]) + P[4] * (-K[0] * J[2] - K[4] * J[3])) + (-K[3] * J[2] - K[7] * J[3]) * (P[1] * (1 - K[0] * J[0] - K[4] * J[1]) + P[5] * (-K[0] * J[2] - K[4] * J[3])) + P[3] * (1 - K[0] * J[0] - K[4] * J[1]) + P[7] * (-K[0] * J[2] - K[4] * J[3]) + K[0] * var_range * K[3] + K[4] * var_bearing * K[7];
     cov_update[4] = (1 - K[0] * J[0] - K[4] * J[1]) * (P[0] * (-K[1] * J[0] - K[5] * J[1]) + P[4] * (1 - K[1] * J[2] - K[5] * J[3])) + (-K[0] * J[2] - K[4] * J[3]) * (P[1] * (-K[1] * J[0] - K[5] * J[1]) + P[5] * (1 - K[1] * J[2] - K[5] * J[3])) + K[0] * var_range * K[1] + K[4] * var_bearing * K[5];
-    cov_update[5] = (-K[1] * J[0] - K[5] * J[1]) * (P[0] * (-K[1] * J[0] - K[5] * J[1]) + P[4] * (1 - K[1] * J[2] - K[5] * J[3])) + (1 - K[1] * J[2] - K[5] * J[3]) * (P[1] * (-K[1] * J[0] - K[5] * J[1]) + P[5] * (1 - K[1] * J[2] - K[5] * J[3])) + var_range *  pow(K[1], 2) + var_bearing *  pow(K[5], 2);
+    cov_update[5] = (-K[1] * J[0] - K[5] * J[1]) * (P[0] * (-K[1] * J[0] - K[5] * J[1]) + P[4] * (1 - K[1] * J[2] - K[5] * J[3])) + (1 - K[1] * J[2] - K[5] * J[3]) * (P[1] * (-K[1] * J[0] - K[5] * J[1]) + P[5] * (1 - K[1] * J[2] - K[5] * J[3])) + var_range *  pow( K[1],  2) + var_bearing *  pow( K[5],  2);
     cov_update[6] = (-K[2] * J[0] - K[6] * J[1]) * (P[0] * (-K[1] * J[0] - K[5] * J[1]) + P[4] * (1 - K[1] * J[2] - K[5] * J[3])) + (-K[2] * J[2] - K[6] * J[3]) * (P[1] * (-K[1] * J[0] - K[5] * J[1]) + P[5] * (1 - K[1] * J[2] - K[5] * J[3])) + P[2] * (-K[1] * J[0] - K[5] * J[1]) + P[6] * (1 - K[1] * J[2] - K[5] * J[3]) + K[1] * var_range * K[2] + K[5] * var_bearing * K[6];
     cov_update[7] = (-K[3] * J[0] - K[7] * J[1]) * (P[0] * (-K[1] * J[0] - K[5] * J[1]) + P[4] * (1 - K[1] * J[2] - K[5] * J[3])) + (-K[3] * J[2] - K[7] * J[3]) * (P[1] * (-K[1] * J[0] - K[5] * J[1]) + P[5] * (1 - K[1] * J[2] - K[5] * J[3])) + P[3] * (-K[1] * J[0] - K[5] * J[1]) + P[7] * (1 - K[1] * J[2] - K[5] * J[3]) + K[1] * var_range * K[3] + K[5] * var_bearing * K[7];
     cov_update[8] = (1 - K[0] * J[0] - K[4] * J[1]) * (P[0] * (-K[2] * J[0] - K[6] * J[1]) + P[4] * (-K[2] * J[2] - K[6] * J[3]) + P[8]) + (-K[0] * J[2] - K[4] * J[3]) * (P[1] * (-K[2] * J[0] - K[6] * J[1]) + P[5] * (-K[2] * J[2] - K[6] * J[3]) + P[9]) + K[0] * var_range * K[2] + K[4] * var_bearing * K[6];
     cov_update[9] = (-K[1] * J[0] - K[5] * J[1]) * (P[0] * (-K[2] * J[0] - K[6] * J[1]) + P[4] * (-K[2] * J[2] - K[6] * J[3]) + P[8]) + (1 - K[1] * J[2] - K[5] * J[3]) * (P[1] * (-K[2] * J[0] - K[6] * J[1]) + P[5] * (-K[2] * J[2] - K[6] * J[3]) + P[9]) + K[1] * var_range * K[2] + K[5] * var_bearing * K[6];
-    cov_update[10] = (-K[2] * J[0] - K[6] * J[1]) * (P[0] * (-K[2] * J[0] - K[6] * J[1]) + P[4] * (-K[2] * J[2] - K[6] * J[3]) + P[8]) + (-K[2] * J[2] - K[6] * J[3]) * (P[1] * (-K[2] * J[0] - K[6] * J[1]) + P[5] * (-K[2] * J[2] - K[6] * J[3]) + P[9]) + P[2] * (-K[2] * J[0] - K[6] * J[1]) + P[6] * (-K[2] * J[2] - K[6] * J[3]) + P[10] + var_range *  pow(K[2], 2) + var_bearing *  pow(K[6], 2);
+    cov_update[10] = (-K[2] * J[0] - K[6] * J[1]) * (P[0] * (-K[2] * J[0] - K[6] * J[1]) + P[4] * (-K[2] * J[2] - K[6] * J[3]) + P[8]) + (-K[2] * J[2] - K[6] * J[3]) * (P[1] * (-K[2] * J[0] - K[6] * J[1]) + P[5] * (-K[2] * J[2] - K[6] * J[3]) + P[9]) + P[2] * (-K[2] * J[0] - K[6] * J[1]) + P[6] * (-K[2] * J[2] - K[6] * J[3]) + P[10] + var_range *  pow( K[2],  2) + var_bearing *  pow( K[6],  2);
     cov_update[11] = (-K[3] * J[0] - K[7] * J[1]) * (P[0] * (-K[2] * J[0] - K[6] * J[1]) + P[4] * (-K[2] * J[2] - K[6] * J[3]) + P[8]) + (-K[3] * J[2] - K[7] * J[3]) * (P[1] * (-K[2] * J[0] - K[6] * J[1]) + P[5] * (-K[2] * J[2] - K[6] * J[3]) + P[9]) + P[3] * (-K[2] * J[0] - K[6] * J[1]) + P[7] * (-K[2] * J[2] - K[6] * J[3]) + P[11] + K[2] * var_range * K[3] + K[6] * var_bearing * K[7];
     cov_update[12] = (1 - K[0] * J[0] - K[4] * J[1]) * (P[0] * (-K[3] * J[0] - K[7] * J[1]) + P[4] * (-K[3] * J[2] - K[7] * J[3]) + P[12]) + (-K[0] * J[2] - K[4] * J[3]) * (P[1] * (-K[3] * J[0] - K[7] * J[1]) + P[5] * (-K[3] * J[2] - K[7] * J[3]) + P[13]) + K[0] * var_range * K[3] + K[4] * var_bearing * K[7];
     cov_update[13] = (-K[1] * J[0] - K[5] * J[1]) * (P[0] * (-K[3] * J[0] - K[7] * J[1]) + P[4] * (-K[3] * J[2] - K[7] * J[3]) + P[12]) + (1 - K[1] * J[2] - K[5] * J[3]) * (P[1] * (-K[3] * J[0] - K[7] * J[1]) + P[5] * (-K[3] * J[2] - K[7] * J[3]) + P[13]) + K[1] * var_range * K[3] + K[5] * var_bearing * K[7];
     cov_update[14] = (-K[2] * J[0] - K[6] * J[1]) * (P[0] * (-K[3] * J[0] - K[7] * J[1]) + P[4] * (-K[3] * J[2] - K[7] * J[3]) + P[12]) + (-K[2] * J[2] - K[6] * J[3]) * (P[1] * (-K[3] * J[0] - K[7] * J[1]) + P[5] * (-K[3] * J[2] - K[7] * J[3]) + P[13]) + P[2] * (-K[3] * J[0] - K[7] * J[1]) + P[6] * (-K[3] * J[2] - K[7] * J[3]) + P[14] + K[2] * var_range * K[3] + K[6] * var_bearing * K[7];
-    cov_update[15] = (-K[3] * J[0] - K[7] * J[1]) * (P[0] * (-K[3] * J[0] - K[7] * J[1]) + P[4] * (-K[3] * J[2] - K[7] * J[3]) + P[12]) + (-K[3] * J[2] - K[7] * J[3]) * (P[1] * (-K[3] * J[0] - K[7] * J[1]) + P[5] * (-K[3] * J[2] - K[7] * J[3]) + P[13]) + P[3] * (-K[3] * J[0] - K[7] * J[1]) + P[7] * (-K[3] * J[2] - K[7] * J[3]) + P[15] + var_range *  pow(K[3], 2) + var_bearing *  pow(K[7], 2);
+    cov_update[15] = (-K[3] * J[0] - K[7] * J[1]) * (P[0] * (-K[3] * J[0] - K[7] * J[1]) + P[4] * (-K[3] * J[2] - K[7] * J[3]) + P[12]) + (-K[3] * J[2] - K[7] * J[3]) * (P[1] * (-K[3] * J[0] - K[7] * J[1]) + P[5] * (-K[3] * J[2] - K[7] * J[3]) + P[13]) + P[3] * (-K[3] * J[0] - K[7] * J[1]) + P[7] * (-K[3] * J[2] - K[7] * J[3]) + P[15] + var_range *  pow( K[3],  2) + var_bearing *  pow( K[7],  2);
 }
 
 /// kernel for computing various constants used in the CPHD filter
@@ -559,7 +552,7 @@ __global__ void
 predictMapKernel(GaussianType* features_prior, MotionModelType model,
                  int n_features, GaussianType* features_predict)
 {
-    int tid = threadIdx.x ;
+    int tid = blockIdx.x*blockDim.x + threadIdx.x ;
     // loop over all features
     for (int j = 0 ; j < n_features ; j+=blockDim.x*gridDim.x)
     {
@@ -573,8 +566,9 @@ predictMapKernel(GaussianType* features_prior, MotionModelType model,
 }
 
 /// host-side helper function for PHD filter prediction
+template <class GaussianType>
 void
-phdPredict(ParticleSLAM& particles, AckermanControl control )
+phdPredict(ParticleSLAM<GaussianType>& particles, ... )
 {
     // start timer
     cudaEvent_t start, stop ;
@@ -688,6 +682,12 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
     }
     else if( config.motionType == ACKERMAN_MOTION )
     {
+        // read in the control data structure from variable argument lest
+        va_list argptr ;
+        va_start(argptr,particles) ;
+        AckermanControl control = (AckermanControl)va_arg(argptr,AckermanControl) ;
+        va_end(argptr) ;
+
         // generate random noise values
         std::vector<AckermanNoise> noiseVector(nPredict) ;
         for (unsigned int i = 0 ; i < nPredict ; i++ )
@@ -729,7 +729,7 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
     // vehicle particles, and downscale particle weights
     if ( config.nPredictParticles > 1 )
     {
-        vector<gaussianMixture> maps_predict ;
+        vector<vector<GaussianType> > maps_predict ;
         vector<double> weights_predict ;
         vector< vector <REAL> > cardinalities_predict ;
         maps_predict.clear();
@@ -756,9 +756,9 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
     }
 
     //----------- map features prediction -------------//
-    ConstantPositionMotionModel motion_model ;
-    motion_model.std_vx = config.stdVx ;
-    motion_model.std_vy = config.stdVy ;
+    ConstantVelocityMotionModel motion_model ;
+    motion_model.std_accx = config.stdAxMap ;
+    motion_model.std_accy = config.stdAyMap ;
     vector<Gaussian4D> all_features = combineFeatures<Gaussian4D>(particles) ;
     int n_features = all_features.size() ;
     Gaussian4D* dev_features_prior = NULL ;
@@ -771,7 +771,7 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
                               n_features*sizeof(Gaussian4D),
                               cudaMemcpyHostToDevice) ) ;
     int n_blocks = (n_features+255)/256 ;
-    predictMapKernel<Gaussian4D,ConstantVelocityMotionModel><<<n_blocks,256>>>
+    predictMapKernel<<<n_blocks,256>>>
         (dev_features_prior,motion_model,n_features, dev_features_predict ) ;
     CUDA_SAFE_CALL(cudaMemcpy(&all_features[0],dev_features_predict,
                               n_features*sizeof(Gaussian4D),
@@ -827,8 +827,9 @@ phdPredict(ParticleSLAM& particles, AckermanControl control )
         Should be allocated to have [nParticles] elements. Each entry
         represents the number of in range features for each particle.
   */
+template<class GaussianType>
 __global__ void
-computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticles,
+computeInRangeKernel( GaussianType *predictedFeatures, int* mapSizes, int nParticles,
                 ConstantVelocityState* poses, char* inRange, int* nInRange, int* n_out_range2 )
 {
     int tid = threadIdx.x ;
@@ -841,7 +842,7 @@ computeInRangeKernel( Gaussian2D *predictedFeatures, int* mapSizes, int nParticl
     // vehicle pose of the thread block
     ConstantVelocityState blockPose ;
 
-    Gaussian2D feature ;
+    GaussianType feature ;
     for ( int p = 0 ; p < nParticles ; p += gridDim.x )
     {
         if ( p + blockIdx.x < nParticles )
@@ -1465,7 +1466,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
     __shared__ REAL sdata[256] ;
     __shared__ REAL particle_weight ;
     __shared__ REAL cardinality_predict ;
-    __shared__ REAL cardinality_updated ;
+//    __shared__ REAL cardinality_updated ;
     __shared__ int map_idx ;
     __shared__ int update_offset ;
     __shared__ int n_features ;
@@ -1511,7 +1512,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 pose = poses[map_idx] ;
                 particle_weight = 0 ;
                 cardinality_predict = 0.0 ;
-                cardinality_updated = 0.0 ;
+//                cardinality_updated = 0.0 ;
                 max_feature = 0 ;
             }
             __syncthreads() ;
@@ -1934,7 +1935,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
     __shared__ REAL sdata[256] ;
     __shared__ REAL particle_weight ;
     __shared__ REAL cardinality_predict ;
-    __shared__ REAL cardinality_updated ;
+//    __shared__ REAL cardinality_updated ;
     __shared__ int map_idx ;
     __shared__ int update_offset ;
     __shared__ int n_features ;
@@ -1948,14 +1949,14 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
     // pre-update variables
     REAL featurePd = 0 ;
     REAL K[8] = {0,0,0,0,0,0,0,0} ;
-    REAL sigmaInv[16] = {0,0,0,0
-                        ,0,0,0,0
-                        ,0,0,0,0
-                        ,0,0,0,0} ;
+    REAL sigmaInv[4] = {0,0,0,0} ;
     REAL detSigma = 0 ;
     Gaussian4D feature ;
     RangeBearingMeasurement z_predict ;
-    REAL covUpdate[16] ;
+    REAL covUpdate[16] = {0,0,0,0
+                         ,0,0,0,0
+                         ,0,0,0,0
+                         ,0,0,0,0} ;
 
     // update variables
     RangeBearingMeasurement z ;
@@ -1983,7 +1984,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                 pose = poses[map_idx] ;
                 particle_weight = 0 ;
                 cardinality_predict = 0.0 ;
-                cardinality_updated = 0.0 ;
+//                cardinality_updated = 0.0 ;
                 max_feature = 0 ;
             }
             __syncthreads() ;
@@ -2006,14 +2007,22 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                     computePreUpdateComponentsDynamic( pose, feature, K, covUpdate,
                                                 &detSigma, sigmaInv, &featurePd,
                                                 &z_predict ) ;
+//                    if (tid==0 && blockIdx.x == 0)
+//                    {
+//                        cuPrintf("z_predict = [%f %f]\n",z_predict.range,z_predict.bearing) ;
+//                        cuPrintf("sigmaInv = [%f %f %f %f]\n",sigmaInv[0],sigmaInv[1],sigmaInv[2],sigmaInv[3]) ;
+//                        cuPrintf("covUpdate = [%f",covUpdate[0]) ;
+//                        for ( int k = 1 ; k < 16 ; k++ )
+//                            cuPrintf(", %f",covUpdate[k]) ;
+//                        cuPrintf("]\n") ;
+//                    }
                     /*
                      * END PRECOMPUTE UPDATE COMPONENTS
                      */
 
                     // save the non-detection term
                     int nonDetectIdx = update_offset + feature_idx ;
-                    copy_gaussians<Gaussian4D>(&feature,
-                                               &updated_features[nonDetectIdx]) ;
+                    copy_gaussians(feature,updated_features[nonDetectIdx]) ;
                     REAL nonDetectWeight = feature.weight * (1-featurePd) ;
                     updated_features[nonDetectIdx].weight = nonDetectWeight ;
                     if ( nonDetectWeight >= dev_config.minFeatureWeight )
@@ -2076,10 +2085,10 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                     updated_features[updateIdx].cov[13] = 0 ;
                     updated_features[updateIdx].cov[14] = 0 ;
 
-                    // compute pre-update components for newborn feature
-                    computePreUpdateComponentsDynamic( pose, feature, K, covUpdate,
-                                                &detSigma, sigmaInv, &featurePd,
-                                                &z_predict ) ;
+//                    // compute pre-update components for newborn feature
+//                    computePreUpdateComponentsDynamic( pose, feature, K, covUpdate,
+//                                                &detSigma, sigmaInv, &featurePd,
+//                                                &z_predict ) ;
                     // set Pd to 1 for newborn features
                     featurePd = 1 ;
                     // no non-detection term for newborn features
@@ -2088,7 +2097,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                 {
                     // thread does not correspond to a feature
                     featurePd = 0 ;
-                    feature.weight = 0 ;
+                    feature.weight = -FLT_MAX ;
                     for (int i = 0 ; i < 16 ; i++)
                         covUpdate[i] = 0 ;
                 }
@@ -2126,11 +2135,18 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                                 innov[0]*innov[1]*(sigmaInv[1] + sigmaInv[2]) +
                                 innov[1]*innov[1]*sigmaInv[3] ;
 
+                        if (blockIdx.x==0 && dist < 0)
+                        {
+                            cuPrintf("[%d,%d],%f,[%f,%f,%f,%f]\n",
+                                     feature_idx,updateIdx,detSigma,
+                                     sigmaInv[0],sigmaInv[1],sigmaInv[2],sigmaInv[3]) ;
+                        }
                         // Gating for measurement update
                         if ( dev_config.gateMeasurements && dist > dev_config.gateThreshold)
-                            dist = FLT_MAX ;
+                            dist = 123456.789 ;
 
                         // partially updated weight
+                        w_partial = 66666666 ;
                         if ( featurePd > 0 )
                         {
                             logLikelihood = safeLog(featurePd) + safeLog(feature.weight)
@@ -2139,9 +2155,11 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                         }
                         else
                         {
-                            w_partial = -FLT_MAX ;
+                            w_partial = -123456.789 ;
                         }
                         // save updated gaussian with partially updated weight
+//                        if (map_idx == 13)
+//                            cuPrintf("[%d,%d,%f,%f,%f,%f,%f]\n",tid,updateIdx,featurePd,feature.weight,dist,detSigma,w_partial) ;
                         updated_features[updateIdx].weight = w_partial ;
                         for ( int j = 0 ; j < 16 ; j++)
                         {
@@ -2149,6 +2167,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                                 updated_features[updateIdx].mean[j] = meanUpdate[j] ;
                             updated_features[updateIdx].cov[j] = covUpdate[j] ;
                         }
+//                        force_symmetric_covariance(updated_features[updateIdx]) ;
                     }
                 }
             }
@@ -2202,6 +2221,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
             }
 
             // compute the weight normalizers
+            __syncthreads() ;
             for ( int i = 0 ; i < n_measure ; i++ )
             {
                 REAL log_normalizer = 0 ;
@@ -2213,7 +2233,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                     for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
                     {
                         int feature_idx = j+tid ;
-                        if ( feature_idx < (n_features) )
+                        if ( feature_idx < n_features )
                         {
                             updateIdx = update_offset + n_features + i*n_features + feature_idx ;
                             w_partial = updated_features[updateIdx].weight ;
@@ -2228,10 +2248,10 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                     }
 
                     // do the exponent sum
-                    for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
+                    for ( int j = 0 ; j < n_features ; j += blockDim.x )
                     {
                         int feature_idx = j+tid ;
-                        if ( feature_idx < (n_features) )
+                        if ( feature_idx < n_features )
                         {
                             updateIdx = update_offset + n_features + i*n_features + feature_idx ;
                             w_partial = exp(updated_features[updateIdx].weight-val) ;
@@ -2253,6 +2273,10 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
 
                     // put back in log form
                     log_normalizer = safeLog(sum) ;
+//                    if (log_normalizer > 0)
+//                    {
+//                        cuPrintf("sum = %f\n",sum) ;
+//                    }
                 }
                 else
                 {
@@ -2262,7 +2286,35 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
 
                 // update the pose particle weights
                 if ( tid == 0 && dev_config.particleWeighting == 0 )
+                {
                     particle_weight += log_normalizer ;
+                    if (particle_weight > 0 && map_idx==13 && i == 0)
+                    {
+                        cuPrintf("n_features = %d\n",n_features) ;
+                        cuPrintf("update_offset = %d\n",update_offset) ;
+//                        cuPrintf("map_offsets=[%d",map_offsets[0]) ;
+//                        for ( int k = 1 ; k < gridDim.x ; k++ )
+//                        {
+//                            cuPrintf(", %d",map_offsets[k]) ;
+//                        }
+//                        cuPrintf("]\n") ;
+//                        for ( int k = 0 ; k < n_update ; k++ )
+//                        {
+//                            cuPrintf("[%d,%d,%d, %f,%f,%f,%f,%f]\n",map_idx,i,k,
+//                                     updated_features[update_offset+k].weight,
+//                                     updated_features[update_offset+k].mean[0],
+//                                     updated_features[update_offset+k].mean[1],
+//                                     updated_features[update_offset+k].mean[2],
+//                                     updated_features[update_offset+k].mean[3]) ;
+//                            cuPrintf("cov_update[%d] = [%f",k,updated_features[update_offset+k].cov[0]) ;
+//                            for ( int l = 1 ; l < 16 ; l++ )
+//                            {
+//                                cuPrintf(", %f",updated_features[update_offset+k].cov[l]) ;
+//                            }
+//                            cuPrintf("]\n") ;
+//                        }
+                    }
+                }
                 __syncthreads() ;
 
                 // compute final feature weights
@@ -2278,13 +2330,9 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                         // check if updated feature should be retained for
                         // GM merging step
                         if ( weightUpdate >= dev_config.minFeatureWeight)
-                        {
                             mergedFlags[updateIdx] = false ;
-                        }
                         else
-                        {
                             mergedFlags[updateIdx] = true ;
-                        }
                     }
                     else if ( feature_idx == n_features )
                     {
@@ -2295,13 +2343,9 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                         // check if updated feature should be retained for
                         // GM merging step
                         if ( weightUpdate >= dev_config.minFeatureWeight)
-                        {
                             mergedFlags[updateIdx] = false ;
-                        }
                         else
-                        {
                             mergedFlags[updateIdx] = true ;
-                        }
                     }
                 }
             }
@@ -2314,7 +2358,7 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
                 if ( tid == 0 )
                 {
                     particle_weight -= cardinality_predict ;
-                    particleWeights[map_idx] = particle_weight ;
+                    particleWeights[map_idx] = particle_weight ;  
                 }
             }
             // Vo-EmptyMap particle weighting
@@ -2374,23 +2418,28 @@ phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
     }
 }
 
+template <class GaussianType>
 __global__ void
-phdUpdateMergeKernel(Gaussian2D *updated_features,
-                     Gaussian2D *mergedFeatures, int *mergedSizes,
+phdUpdateMergeKernel(GaussianType* updated_features,
+                     GaussianType* mergedFeatures, int *mergedSizes,
                      bool *mergedFlags, int* mapSizes, int nParticles )
 {
-    __shared__ Gaussian2D maxFeature ;
-    __shared__ REAL wMerge ;
-    __shared__ REAL meanMerge[2] ;
-    __shared__ REAL covMerge[4] ;
+    __shared__ GaussianType maxFeature ;
+//    __shared__ REAL wMerge ;
+//    __shared__ REAL meanMerge[2] ;
+//    __shared__ REAL covMerge[4] ;
+    __shared__ GaussianType mergedFeature ;
     __shared__ REAL sdata[256] ;
     __shared__ int mergedSize ;
     __shared__ int update_offset ;
     __shared__ int n_update ;
     int tid = threadIdx.x ;
     REAL dist ;
-    REAL innov[2] ;
-    Gaussian2D feature ;
+//    REAL innov[2] ;
+    GaussianType feature ;
+    clearGaussian(feature) ;
+    int dims = getGaussianDim(feature) ;
+
     // loop over particles
     for ( int p = 0 ; p < nParticles ; p += gridDim.x )
     {
@@ -2415,13 +2464,7 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
                 if ( tid == 0 )
                 {
                     maxFeature.weight = -1 ;
-                    wMerge = 0 ;
-                    meanMerge[0] = 0 ;
-                    meanMerge[1] = 0 ;
-                    covMerge[0] = 0 ;
-                    covMerge[1] = 0 ;
-                    covMerge[2] = 0 ;
-                    covMerge[3] = 0 ;
+                    clearGaussian(mergedFeature) ;
                 }
                 sdata[tid] = -1 ;
                 __syncthreads() ;
@@ -2461,27 +2504,16 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
                     __syncthreads() ;
                 }
                 if ( sdata[0] == -1 || maxFeature.weight == 0 )
-                {
                     break ;
-                }
                 else if(tid == 0)
-                {
                     maxFeature = updated_features[ (unsigned int)sdata[0] ] ;
-//                    wMerge = maxFeature.weight ;
-//                    meanMerge[0] = maxFeature.mean[0] ;
-//                    meanMerge[1] = maxFeature.mean[1] ;
-//                    covMerge[0] = maxFeature.cov[0] ;
-//                    covMerge[1] = maxFeature.cov[1] ;
-//                    covMerge[2] = maxFeature.cov[2] ;
-//                    covMerge[3] = maxFeature.cov[3] ;
-//                    mergedFlags[ (unsigned int)sdata[0] ] = true ;
-                }
                 __syncthreads() ;
 
                 // find features to merge with max feature
                 REAL sval0 = 0 ;
-                REAL sval1 = 0 ;
-                REAL sval2 = 0 ;
+//                REAL sval1 = 0 ;
+//                REAL sval2 = 0 ;
+                clearGaussian(feature) ;
                 for ( int i = update_offset ; i < update_offset + n_update ; i += blockDim.x )
                 {
                     int idx = tid + i ;
@@ -2489,40 +2521,41 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
                     {
                         if ( !mergedFlags[idx] )
                         {
-                            feature = updated_features[idx] ;
                             if ( dev_config.distanceMetric == 0 )
-                                dist = computeMahalDist(maxFeature, feature) ;
+                                dist = computeMahalDist(maxFeature, updated_features[idx]) ;
                             else if ( dev_config.distanceMetric == 1)
-                                dist = computeHellingerDist(maxFeature, feature) ;
+                                dist = computeHellingerDist(maxFeature, updated_features[idx]) ;
                             if ( dist < dev_config.minSeparation )
                             {
-                                sval0 += feature.weight ;
-                                sval1 += feature.mean[0]*feature.weight ;
-                                sval2 += feature.mean[1]*feature.weight ;
+                                feature.weight += updated_features[idx].weight ;
+                                for ( int j = 0 ; j < dims ; j++ )
+                                    feature.mean[j] += updated_features[idx].weight*updated_features[idx].mean[j] ;
                             }
                         }
                     }
                 }
+                // merge means and weights
+                sval0 = feature.weight ;
                 sumByReduction(sdata, sval0, tid) ;
                 if ( tid == 0 )
-                    wMerge += sdata[0] ;
+                    mergedFeature.weight = sdata[0] ;
                 __syncthreads() ;
-                if ( wMerge == 0 )
+                if ( mergedFeature.weight == 0 )
                     break ;
-                sumByReduction( sdata, sval1, tid ) ;
-                if ( tid == 0 )
-                    meanMerge[0] += sdata[0]/wMerge ;
-                __syncthreads() ;
-                sumByReduction( sdata, sval2, tid ) ;
-                if ( tid == 0 )
-                    meanMerge[1] += sdata[0]/wMerge ;
-                __syncthreads() ;
-
+                for ( int j = 0 ; j < dims ; j++ )
+                {
+                    sval0 = feature.mean[j] ;
+                    sumByReduction(sdata,sval0,tid);
+                    if( tid == 0 )
+                        mergedFeature.mean[j] = sdata[0]/mergedFeature.weight ;
+                    __syncthreads() ;
+                }
 
                 // merge the covariances
                 sval0 = 0 ;
-                sval1 = 0 ;
-                sval2 = 0 ;
+//                sval1 = 0 ;
+//                sval2 = 0 ;
+                clearGaussian(feature) ;
                 for ( int i = update_offset ; i < update_offset+n_update ; i += blockDim.x )
                 {
                     int idx = tid + i ;
@@ -2530,46 +2563,49 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
                     {
                         if (!mergedFlags[idx])
                         {
-                            feature = updated_features[idx] ;
                             if ( dev_config.distanceMetric == 0 )
-                                dist = computeMahalDist(maxFeature, feature) ;
+                                dist = computeMahalDist(maxFeature, updated_features[idx]) ;
                             else if ( dev_config.distanceMetric == 1)
-                                dist = computeHellingerDist(maxFeature, feature) ;
+                                dist = computeHellingerDist(maxFeature, updated_features[idx]) ;
                             if ( dist < dev_config.minSeparation )
                             {
-                                innov[0] = meanMerge[0] - feature.mean[0] ;
-                                innov[1] = meanMerge[1] - feature.mean[1] ;
-                                sval0 += (feature.cov[0] + innov[0]*innov[0])*feature.weight ;
-                                sval1 += (feature.cov[1] +feature.cov[2] + 2*innov[0]*innov[1])*feature.weight/2 ;
-                                sval2 += (feature.cov[3] + innov[1]*innov[1])*feature.weight ;
+                                // use the mean of the local gaussian variable
+                                // to store the innovation vector
+                                for (int j = 0 ; j < dims ; j++)
+                                {
+                                    feature.mean[j] = mergedFeature.mean[j]
+                                            - updated_features[idx].mean[j] ;
+                                }
+                                for (int j = 0 ; j < dims ; j++ )
+                                {
+                                    REAL outer = feature.mean[j] ;
+                                    for ( int k = 0 ; k < dims ; k++)
+                                    {
+                                        REAL inner = feature.mean[k] ;
+                                        feature.cov[j*dims+k] +=
+                                                updated_features[idx].weight*
+                                                (updated_features[idx].cov[j*dims+k]
+                                                + outer*inner) ;
+                                    }
+                                }
                                 mergedFlags[idx] = true ;
                             }
                         }
                     }
                 }
-                sumByReduction(sdata, sval0, tid) ;
-                if ( tid == 0 )
-                    covMerge[0] += sdata[0]/wMerge ;
-                __syncthreads() ;
-                sumByReduction( sdata, sval1, tid ) ;
-                if ( tid == 0 )
+                for ( int j = 0 ; j < dims*dims ; j++)
                 {
-                    covMerge[1] += sdata[0]/wMerge ;
-                    covMerge[2] = covMerge[1] ;
+                    sval0 = feature.cov[j] ;
+                    sumByReduction(sdata,sval0,tid);
+                    if ( tid == 0 )
+                        mergedFeature.cov[j] = sdata[0]/mergedFeature.weight ;
+                    __syncthreads() ;
                 }
-                __syncthreads() ;
-                sumByReduction( sdata, sval2, tid ) ;
                 if ( tid == 0 )
                 {
-                    covMerge[3] += sdata[0]/wMerge ;
+                    force_symmetric_covariance(mergedFeature) ;
                     int mergeIdx = update_offset + mergedSize ;
-                    mergedFeatures[mergeIdx].weight = wMerge ;
-                    mergedFeatures[mergeIdx].mean[0] = meanMerge[0] ;
-                    mergedFeatures[mergeIdx].mean[1] = meanMerge[1] ;
-                    mergedFeatures[mergeIdx].cov[0] = covMerge[0] ;
-                    mergedFeatures[mergeIdx].cov[1] = covMerge[1] ;
-                    mergedFeatures[mergeIdx].cov[2] = covMerge[2] ;
-                    mergedFeatures[mergeIdx].cov[3] = covMerge[3] ;
+                    copy_gaussians(mergedFeature,mergedFeatures[mergeIdx]) ;
                     mergedSize++ ;
                 }
                 __syncthreads() ;
@@ -2583,42 +2619,9 @@ phdUpdateMergeKernel(Gaussian2D *updated_features,
     return ;
 }
 
-
-//__global__ void
-//fastSlamUpdateKernel( Gaussian2D* predict_features, ConstantVelocityState* poses,
-//                      int* map_offsets, int n_measure, REAL* log_g )
-//{
-//    int f_idx = threadIdx.x ;
-//    int z_idx = threadIdx.y ;
-//    int map_idx = blockIdx.x ;
-//    int n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
-//    int predict_offset = map_offsets[map_idx] ;
-//    int update_offset = predict_offset*(n_measure) ;
-//    int g_idx = update_offset + z_idx*n_features + f_idx ;
-
-//    Gaussian2D feature = predict_features[predict_offset+f_idx] ;
-//    ConstantVelocityState pose = poses[map_idx] ;
-
-//    RangeBearingMeasurement z_predict ;
-//    REAL K[4] ;
-//    REAL S_inverse[4] ;
-//    REAL cov_update[4] ;
-//    REAL det_sigma ;
-//    REAL feature_pd ;
-//    REAL S_inv[4] ;
-//    computePreUpdateComponents(pose,feature,K,cov_update,&det_sigma,S_inv,
-//                               &feature_pd,&z_predict) ;
-//}
-
-//void
-//fastSlamDataAssociation()
-//{
-//    // compute individual compatibility
-//    // compute jcbb association
-//}
-
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements)
+template<class GaussianType>
+ParticleSLAM<GaussianType>
+phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 {
     //------- Variable Declarations ---------//
 
@@ -2634,11 +2637,11 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     vector<int> map_offsets_in(nParticles+1,0) ;
     vector<int> map_offsets_out(nParticles+1,0) ;
 
-    ParticleSLAM particlesPreMerge ;
+    ParticleSLAM<GaussianType> particlesPreMerge ;
 
     // device variables
     ConstantVelocityState* dev_poses = NULL ;
-    Gaussian4D* dev_maps = NULL ;
+    GaussianType* dev_maps = NULL ;
     int* dev_map_sizes = NULL ;
     int* dev_n_in_range = NULL ;
     int* dev_n_out_range2 = NULL ;
@@ -2647,9 +2650,9 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     int *dev_map_offsets_inrange = NULL ;
     int* dev_n_merged = NULL ;
     char* dev_compatible_z = NULL ;
-    Gaussian4D* dev_maps_inrange = NULL ;
-    Gaussian4D* dev_maps_updated = NULL ;
-    Gaussian4D* dev_maps_merged = NULL ;
+    GaussianType* dev_maps_inrange = NULL ;
+    GaussianType* dev_maps_updated = NULL ;
+    GaussianType* dev_maps_merged = NULL ;
     REAL* dev_particle_weights = NULL ;
     bool* dev_merged_flags = NULL ;
 
@@ -2672,16 +2675,16 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     int n_out_range = 0 ;
     int n_out_range1 = 0 ;
     int n_out_range2 = 0 ;
-    vector<Gaussian4D> features_in ;
-    vector<Gaussian4D> features_out1 ;
-    vector<Gaussian4D> features_out2 ;
+    vector<GaussianType> features_in ;
+    vector<GaussianType> features_out1 ;
+    vector<GaussianType> features_out2 ;
     int idx_in = 0 ;
     int idx_out = 0 ;
     int idx_out2 = 0 ;
 
     // output variables
-    vector<Gaussian4D> * maps_merged = NULL ;
-    vector<Gaussian4D> * maps_updated = NULL ;
+    GaussianType* maps_merged = NULL ;
+    GaussianType* maps_updated = NULL ;
     int* map_sizes_merged = NULL ;
 
     //------- End Variable Declarations -----//
@@ -3004,51 +3007,54 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     if ( config.filterType == PHD_TYPE )
     {
         DEBUG_MSG("launching phdUpdateKernel") ;
-        phdUpdateKernel<<<nBlocks,256>>>
+        cudaPrintfInit(4194304) ;
+        phdUpdateKernelDynamic<<<nBlocks,256>>>
             ( dev_maps_inrange, dev_map_offsets_inrange, nParticles, n_measure,
               dev_poses, dev_maps_updated,
               dev_merged_flags,dev_particle_weights ) ;
         CUDA_SAFE_THREAD_SYNC() ;
+        cudaPrintfDisplay(stdout,false) ;
+        cudaPrintfEnd();
     }
     else if ( config.filterType == CPHD_TYPE )
     {
-        int n_blocks = ceil( (float)n_update/128 ) ;
-        DEBUG_MSG("launching cphdPreUpdateKernel") ;
-        cphdPreUpdateKernel<<<n_blocks, 128>>>
-            ( dev_maps_inrange,	dev_map_offsets_inrange,nParticles,
-              n_measure,dev_poses, dev_maps_updated,dev_wpartial, dev_qdw ) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+//        int n_blocks = ceil( (float)n_update/128 ) ;
+//        DEBUG_MSG("launching cphdPreUpdateKernel") ;
+//        cphdPreUpdateKernel<<<n_blocks, 128>>>
+//            ( dev_maps_inrange,	dev_map_offsets_inrange,nParticles,
+//              n_measure,dev_poses, dev_maps_updated,dev_wpartial, dev_qdw ) ;
+//        CUDA_SAFE_THREAD_SYNC() ;
 
-        size_t shmem_size = sizeof(REAL)*(2*n_measure + 1 ) ;
-        DEBUG_MSG("launching computeEsfKernel") ;
-        computeEsfKernel<<<nParticles, n_measure,shmem_size>>>
-            ( dev_wpartial, dev_map_offsets_inrange, n_measure, dev_esf,
-              dev_esfd ) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+//        size_t shmem_size = sizeof(REAL)*(2*n_measure + 1 ) ;
+//        DEBUG_MSG("launching computeEsfKernel") ;
+//        computeEsfKernel<<<nParticles, n_measure,shmem_size>>>
+//            ( dev_wpartial, dev_map_offsets_inrange, n_measure, dev_esf,
+//              dev_esfd ) ;
+//        CUDA_SAFE_THREAD_SYNC() ;
 
-        shmem_size = sizeof(REAL)*(config.maxCardinality+1) ;
-//		shmem_size = 0 ;
-        DEBUG_MSG("launching computePsiKernel") ;
-        computePsiKernel<<<nParticles, config.maxCardinality+1, shmem_size>>>
-            ( dev_maps_inrange, dev_cnpredict, dev_esf, dev_esfd,
-              dev_map_offsets_inrange, n_measure, dev_qdw,
-              dev_factorial, dev_C, dev_cn_clutter,
-              dev_cnupdate, dev_innerprod0, dev_innerprod1, dev_innerprod1d ) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+//        shmem_size = sizeof(REAL)*(config.maxCardinality+1) ;
+////		shmem_size = 0 ;
+//        DEBUG_MSG("launching computePsiKernel") ;
+//        computePsiKernel<<<nParticles, config.maxCardinality+1, shmem_size>>>
+//            ( dev_maps_inrange, dev_cnpredict, dev_esf, dev_esfd,
+//              dev_map_offsets_inrange, n_measure, dev_qdw,
+//              dev_factorial, dev_C, dev_cn_clutter,
+//              dev_cnupdate, dev_innerprod0, dev_innerprod1, dev_innerprod1d ) ;
+//        CUDA_SAFE_THREAD_SYNC() ;
 
-        DEBUG_MSG("launching cphdUpdateKernel") ;
-        cphdUpdateKernel<<<nParticles, n_measure>>>
-            ( dev_map_offsets_inrange, n_measure,
-              dev_innerprod0, dev_innerprod1, dev_innerprod1d, dev_merged_flags,
-              dev_maps_updated ) ;
-        CUDA_SAFE_THREAD_SYNC() ;
-        CUDA_SAFE_CALL( cudaFree( dev_wpartial) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_cnpredict) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_qdw) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_esf) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_esfd) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_innerprod1) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_innerprod1d) ) ;
+//        DEBUG_MSG("launching cphdUpdateKernel") ;
+////        cphdUpdateKernel<<<nParticles, n_measure>>>
+////            ( dev_map_offsets_inrange, n_measure,
+////              dev_innerprod0, dev_innerprod1, dev_innerprod1d, dev_merged_flags,
+////              dev_maps_updated ) ;
+//        CUDA_SAFE_THREAD_SYNC() ;
+//        CUDA_SAFE_CALL( cudaFree( dev_wpartial) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_cnpredict) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_qdw) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_esf) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_esfd) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_innerprod1) ) ;
+//        CUDA_SAFE_CALL( cudaFree( dev_innerprod1d) ) ;
     }
     CUDA_SAFE_CALL( cudaFree( dev_maps_inrange ) ) ;
 
@@ -3066,40 +3072,6 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                     cudaMemcpy(particle_weights,dev_particle_weights,
                                nParticles*sizeof(REAL),
                                cudaMemcpyDeviceToHost ) ) ;
-//        // compute Vo empty map particle weighting
-//        if ( config.particleWeighting==1 || config.particleWeighting==2)
-//        {
-//            Gaussian4D* maps_combined = (Gaussian4D*)malloc( combined_size ) ;
-//            CUDA_SAFE_CALL(cudaMemcpy(maps_combined,dev_maps_combined,combined_size,
-//                                      cudaMemcpyDeviceToHost) ) ;
-//            offset_updated = 0 ;
-//            for ( int i = 0 ; i < nParticles ; i++ )
-//            {
-//                // predicted cardinality
-//                double cardinality_predict = 0 ;
-//                gaussianMixture map_predict = particles.maps[i] ;
-//                for ( int j = 0 ; j < map_predict.size() ; j++ )
-//                    cardinality_predict += map_predict[j].weight ;
-
-//                // updated cardinality
-//                double cardinality_update = 0 ;
-//                for ( int j = 0 ; j < mapSizes[i] ; j++)
-//                    cardinality_update += maps_combined[offset_updated++].weight ;
-
-//                if ( config.particleWeighting == 1)
-//                {
-//                    // compute particle weight
-//                    particle_weights[i] = n_measure*safeLog(config.clutterDensity)
-//                            + cardinality_update - cardinality_predict
-//                            - config.clutterRate ;
-//                }
-//                else
-//                {
-//                    particle_weights[i] -= (cardinality_predict-cardinality_update+config.clutterDensity) ;
-//                }
-//            }
-//            free(maps_combined) ;
-//        }
     }
     else if ( config.filterType == CPHD_TYPE )
     {
@@ -3158,8 +3130,28 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
         CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
         CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags_combined,
                                     (n_update+n_out_range2)*sizeof(bool) ) ) ;
+
+//        bool* merged_flags = (bool*)malloc(n_update*sizeof(bool)) ;
+//        CUDA_SAFE_CALL( cudaMemcpy(merged_flags,dev_merged_flags,
+//                                   n_update*sizeof(bool),
+//                                   cudaMemcpyDeviceToHost )) ;
+//        for ( int n = 0 ; n < n_update ; n++ )
+//            DEBUG_VAL(merged_flags[n]) ;
         for ( int n = 0 ; n < nParticles ; n++ )
         {
+            // in-range map for particle n
+            int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure ;
+            CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
+                                        dev_maps_updated+offset_updated,
+                                        n_in_range_n*sizeof(Gaussian4D),
+                                        cudaMemcpyDeviceToDevice) ) ;
+            CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
+                                        dev_merged_flags+offset_updated,
+                                        n_in_range_n*sizeof(bool)
+                                        ,cudaMemcpyDeviceToDevice ) ) ;
+            offset += n_in_range_n ;
+            offset_updated += n_in_range_n ;
+
             // out-of-range map for particle n
             vector<char> merged_flags_out(n_out_range2_vec[n],0) ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
@@ -3173,21 +3165,9 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
             offset += n_out_range2_vec[n] ;
             offset_out += n_out_range2_vec[n] ;
 
-            // in-range map for particle n
-            int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure ;
-            CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
-                                        dev_maps_updated+offset_updated,
-                                        n_in_range_n*sizeof(Gaussian4D),
-                                        cudaMemcpyDeviceToDevice) ) ;
-            CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
-                                        dev_merged_flags+offset_updated,
-                                        n_in_range_n*sizeof(bool)
-                                        ,cudaMemcpyDeviceToDevice ) ) ;
-            offset += n_in_range_n ;
-            offset_updated += n_in_range_n ;
+
             mapSizes[n] = n_out_range2_vec[n] +
-                    n_in_range_vec[n]*(n_measure+1) +
-                    n_measure ;
+                    n_in_range_n ;
         }
     }
     DEBUG_VAL(combined_size) ;
@@ -3197,6 +3177,8 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                                 nParticles*sizeof(int),
                                 cudaMemcpyHostToDevice ) ) ;
     CUDA_SAFE_THREAD_SYNC() ;
+
+
 
     DEBUG_MSG("launching phdUpdateMergeKernel") ;
     phdUpdateMergeKernel<<<nBlocks,256>>>
@@ -3247,15 +3229,16 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
 
     for ( int i = 0 ; i < nParticles ; i++ )
     {
+//        DEBUG_VAL(mapSizes[i]) ;
 //        DEBUG_VAL(map_sizes_merged[i]) ;
-//		DEBUG_VAL(offset_updated) ;
+//        DEBUG_VAL(offset_updated) ;
         particles.maps[i].assign(maps_merged+offset_updated,
                              maps_merged+offset_updated+map_sizes_merged[i]) ;
-//		particles.maps[i].assign( maps_updated+offset_updated,
-//								maps_updated+offset_updated+n_in_range_vec[i]*(n_measure+1) ) ;
-//                DEBUG_VAL(i) ;
-//                DEBUG_VAL(particles.weights[i]) ;
-//                DEBUG_VAL(particle_weights[i]) ;
+//        particles.maps[i].assign( maps_updated+offset_updated,
+//                                  maps_updated+offset_updated+mapSizes[i] ) ;
+//        DEBUG_VAL(i) ;
+//        DEBUG_VAL(particles.weights[i]) ;
+//        DEBUG_VAL(particle_weights[i]) ;
         particles.weights[i] += particle_weights[i]  ;
 //		DEBUG_VAL(particles.weights[i]) ;
 //		if (particles.weights[i] <= 0 )
@@ -3266,13 +3249,13 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
 
         if ( n_out_range1 > 0 && n_out_range1_vec[i] > 0 )
         {
-                particles.maps[i].insert( particles.maps[i].end(),
-                                        features_out1.begin()+offset_out,
-                                        features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
-                particlesPreMerge.maps[i].insert( particlesPreMerge.maps[i].end(),
-                                                features_out1.begin()+offset_out,
-                                                features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
-                offset_out += n_out_range1_vec[i] ;
+            particles.maps[i].insert( particles.maps[i].end(),
+                                    features_out1.begin()+offset_out,
+                                    features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
+            particlesPreMerge.maps[i].insert( particlesPreMerge.maps[i].end(),
+                                            features_out1.begin()+offset_out,
+                                            features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
+            offset_out += n_out_range1_vec[i] ;
         }
 
         if ( config.filterType == CPHD_TYPE )
@@ -3356,17 +3339,17 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     return particlesPreMerge ;
 }
 
-
-ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
+template <class GaussianType>
+ParticleSLAM<GaussianType> resampleParticles( ParticleSLAM<GaussianType> oldParticles, int n_new_particles)
 {
     if ( n_new_particles < 0 )
     {
         n_new_particles = oldParticles.nParticles ;
     }
 //	unsigned int nParticles = oldParticles.nParticles ;
-    ParticleSLAM newParticles(n_new_particles) ;
-    int compatible_z_step = oldParticles.compatibleZ.size()/oldParticles.nParticles ;
-    newParticles.compatibleZ.reserve( n_new_particles*compatible_z_step );
+    ParticleSLAM<GaussianType> newParticles(n_new_particles) ;
+//    int compatible_z_step = oldParticles.compatibleZ.size()/oldParticles.nParticles ;
+//    newParticles.compatibleZ.reserve( n_new_particles*compatible_z_step );
 
     double interval = 1.0/n_new_particles ;
     double r = randu01() * interval ;
@@ -3411,9 +3394,6 @@ ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
         newParticles.weights[j] = safeLog(interval) ;
         newParticles.states[j] = oldParticles.states[i] ;
         newParticles.maps[j] = oldParticles.maps[i] ;
-        newParticles.compatibleZ.insert(newParticles.compatibleZ.end(),
-                                        oldParticles.compatibleZ.begin()+i*compatible_z_step,
-                                        oldParticles.compatibleZ.begin()+(i+1)*compatible_z_step ) ;
         newParticles.cardinalities[j] = oldParticles.cardinalities[i] ;
         r += interval ;
         //resample_indices[j] = i ;
@@ -3421,18 +3401,19 @@ ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
     return newParticles ;
 }
 
-gaussianMixture computeExpectedMap(ParticleSLAM particles)
+template <class GaussianType>
+vector<GaussianType> computeExpectedMap(ParticleSLAM<GaussianType> particles)
 // concatenate all particle maps into a single slam particle and then call the
 // existing gaussian pruning algorithm ;
 {
     DEBUG_MSG("Computing Expected Map") ;
-    gaussianMixture concat ;
+    vector<GaussianType> concat ;
     int* merged_sizes = (int*)malloc(particles.nParticles*sizeof(int)) ;
     int* map_sizes = (int*)malloc(particles.nParticles*sizeof(int)) ;
     int total_features = 0 ;
     for ( int n = 0 ; n < particles.nParticles ; n++ )
     {
-        gaussianMixture map = particles.maps[n] ;
+        vector<GaussianType> map = particles.maps[n] ;
         for ( int i = 0 ; i < map.size() ; i++ )
             map[i].weight *= exp(particles.weights[n]) ;
         concat.insert( concat.end(), map.begin(), map.end() ) ;
@@ -3443,7 +3424,7 @@ gaussianMixture computeExpectedMap(ParticleSLAM particles)
     if ( total_features == 0 )
     {
         DEBUG_MSG("no features") ;
-        gaussianMixture expected_map(0) ;
+        vector<GaussianType> expected_map(0) ;
         return expected_map ;
     }
     Gaussian4D* all_features = (Gaussian4D*)malloc( total_features*sizeof(Gaussian4D) ) ;
@@ -3502,7 +3483,7 @@ gaussianMixture computeExpectedMap(ParticleSLAM particles)
         }
         total_features = offset_in ;
     }
-    gaussianMixture expected_map(total_features) ;
+    vector<GaussianType> expected_map(total_features) ;
     std::copy( all_features,all_features+total_features, expected_map.begin() ) ;
 
     CUDA_SAFE_CALL( cudaFree( dev_maps_in ) ) ;
@@ -3521,8 +3502,9 @@ bool expectedFeaturesPredicate( Gaussian4D g )
     return (g.weight <= config.minExpectedFeatureWeight) ;
 }
 
-void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
-        gaussianMixture& expectedMap, vector<REAL>& cn_estimate )
+template <class GaussianType>
+void recoverSlamState(ParticleSLAM<GaussianType> particles, ConstantVelocityState& expectedPose,
+        vector<GaussianType>& expectedMap, vector<REAL>& cn_estimate )
 {
     if ( particles.nParticles > 1 )
     {
@@ -3566,7 +3548,7 @@ void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPos
 
         if ( config.mapEstimate == 0)
         {
-            gaussianMixture tmpMap( particles.maps[max_idx] ) ;
+            vector<GaussianType> tmpMap( particles.maps[max_idx] ) ;
             expectedMap = tmpMap ;
         }
         else
@@ -3578,13 +3560,13 @@ void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPos
     }
     else
     {
-        gaussianMixture tmpMap( particles.maps[0] ) ;
-        tmpMap.erase(
-                remove_if( tmpMap.begin(), tmpMap.end(),
-                        expectedFeaturesPredicate),
-                tmpMap.end() ) ;
+//        vector<GaussianType> tmpMap( particles.maps[0] ) ;
+//        tmpMap.erase(
+//                remove_if( tmpMap.begin(), tmpMap.end(),
+//                        expectedFeaturesPredicate),
+//                tmpMap.end() ) ;
         expectedPose = particles.states[0] ;
-        expectedMap = tmpMap ;
+        expectedMap = particles.maps[0] ;
         cn_estimate = particles.cardinalities[0] ;
     }
 }
@@ -3596,3 +3578,11 @@ setDeviceConfig( const SlamConfig& config )
     CUDA_SAFE_CALL(cudaMemcpyToSymbol( dev_config, &config, sizeof(SlamConfig) ) ) ;
 //    seed_rng();
 }
+
+//--- explicitly instantiate templates so linking works correctly
+template void phdPredict<Gaussian4D>(ParticleSLAM<Gaussian4D>& p,...) ;
+template ParticleSLAM<Gaussian4D> phdUpdate<Gaussian4D>(ParticleSLAM<Gaussian4D>& p, measurementSet Z) ;
+template void recoverSlamState<Gaussian4D>(ParticleSLAM<Gaussian4D> p,
+    ConstantVelocityState& pose, vector<Gaussian4D>& map_est, vector<REAL>& cn) ;
+template __global__ void predictMapKernel<Gaussian4D, ConstantVelocityMotionModel>(Gaussian4D* prior, ConstantVelocityMotionModel model, int n, Gaussian4D* predict) ;
+template ParticleSLAM<Gaussian4D> resampleParticles<Gaussian4D>(ParticleSLAM<Gaussian4D> old, int n) ;

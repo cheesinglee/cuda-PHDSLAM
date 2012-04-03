@@ -23,6 +23,7 @@
 #include <sys/time.h>
 //#include "slamparams.h"
 #include "slamtypes.h"
+#include "phdfilter.h"
 #include <cuda.h>
 #include <cutil_inline.h>
 
@@ -41,33 +42,40 @@
 
 using namespace std ;
 
-//--- Externally defined CUDA kernel callers
-extern "C"
-void
-initCphdConstants() ;
+////--- Externally defined CUDA kernel callers
+//extern "C"
+//void
+//initCphdConstants() ;
 
-extern "C"
-void
-phdPredict( ParticleSLAM& particles, AckermanControl control = AckermanControl() ) ;
+//template<class GaussianType>
+//extern void
+//phdPredict(ParticleSLAM<GaussianType>& particles, ... ) ;
 
-extern "C"
-void
-addBirths( ParticleSLAM& particles, measurementSet ZPrev ) ;
+//template<class GaussianType>
+//extern void
+//phdPredictVp( ParticleSLAM<GaussianType>& particles ) ;
 
-extern "C"
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
+//template<class GaussianType>
+//extern void
+//addBirths( ParticleSLAM<GaussianType>& particles, measurementSet ZPrev ) ;
 
-extern "C"
-ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_particles_new = -1 ) ;
+//template<class GaussianType>
+//extern ParticleSLAM<GaussianType>
+//phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements) ;
 
-extern "C"
-void recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
-		gaussianMixture& expectedMap, vector<REAL>& cn_estimate ) ;
+//template<class GaussianType>
+//extern ParticleSLAM<GaussianType>
+//resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles=-1 ) ;
 
-extern "C"
-void setDeviceConfig( const SlamConfig& config ) ;
-//--- End external functions
+//template<class GaussianType>
+//extern void
+//recoverSlamState(ParticleSLAM<GaussianType> particles, ConstantVelocityState& expectedPose,
+//        vector<GaussianType>& expectedMap, vector<REAL>& cn_estimate ) ;
+
+//extern "C"
+//void
+//setDeviceConfig( const SlamConfig& config ) ;
+////--- End external functions
 
 // SLAM configuration
 SlamConfig config ;
@@ -181,7 +189,7 @@ void printMeasurement(RangeBearingMeasurement z)
 }
 
 //void
-//writeParticlesMat(ParticleSLAM particles, int t = -1, const char* filename="particles")
+//writeParticlesMat(ParticleSLAM<Gaussian4D> particles, int t = -1, const char* filename="particles")
 //{
 //        // create the filename
 //        std::string particlesFilename(filename) ;
@@ -266,7 +274,7 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxDestroyArray( mxParticles ) ;
 //}
 
-//void writeLogMat(ParticleSLAM particles, ConstantVelocityState expectedPose,
+//void writeLogMat(ParticleSLAM<Gaussian4D> particles, ConstantVelocityState expectedPose,
 //				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
 //{
 ////        writeParticlesMat(particles,t) ;
@@ -368,7 +376,7 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxDestroyArray( mxStates ) ;
 //}
 
-void writeParticles(ParticleSLAM particles, std::string filename, int t = -1)
+void writeParticles(ParticleSLAM<Gaussian4D> particles, std::string filename, int t = -1)
 {
         std::ostringstream oss ;
         oss << filename ;
@@ -412,12 +420,12 @@ void writeParticles(ParticleSLAM particles, std::string filename, int t = -1)
         particlesFile.close() ;
 }
 
-ParticleSLAM loadParticles(std::string filename)
+ParticleSLAM<Gaussian4D> loadParticles(std::string filename)
 {
     ifstream file( filename.c_str() ) ;
     int n_particles = std::count(std::istreambuf_iterator<char>(file),
                                 std::istreambuf_iterator<char>(), '\n');
-    ParticleSLAM particles(n_particles) ;
+    ParticleSLAM<Gaussian4D> particles(n_particles) ;
     cout << "reading " << n_particles << " particles from " << filename << endl ;
     file.seekg(ifstream::beg) ;
     for ( int n = 0 ; n < n_particles ; n++ )
@@ -432,7 +440,7 @@ ParticleSLAM loadParticles(std::string filename)
             >> particles.states[n].vtheta ;
         while ( !iss.eof() )
         {
-            Gaussian2D feature ;
+            Gaussian4D feature ;
             iss >> feature.weight >> feature.mean[0] >> feature.mean[1]
                 >> feature.cov[0] >> feature.cov[1] >> feature.cov[2]
                 >> feature.cov[3] ;
@@ -446,7 +454,7 @@ ParticleSLAM loadParticles(std::string filename)
 }
 
 template<class GaussianType>
-void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
+void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState expectedPose,
                                 vector<GaussianType> expectedMap, vector<REAL> cn_estimate, int t)
 {
         // create the filename
@@ -465,6 +473,9 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
             // get dimensionality of map
             int len_cov = sizeof(expectedMap[0].cov)/sizeof(REAL) ;
             int len_mean = sqrt(len_cov) ;
+            DEBUG_VAL(len_cov) ;
+            DEBUG_VAL(len_mean) ;
+            DEBUG_VAL(expectedMap.size()) ;
             for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
             {
                 stateFile << expectedMap[n].weight << " " ;
@@ -527,7 +538,7 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
         stateFile.close() ;
 }
 
-//void writeParticlesPickle( ParticleSLAM particles, const char* filename, int t = -1 )
+//void writeParticlesPickle( ParticleSLAM<Gaussian4D> particles, const char* filename, int t = -1 )
 //{
 //	// create the filename
 //	std::string particlesFilename(filename) ;
@@ -634,8 +645,10 @@ void loadConfig(const char* filename)
             ("b", value<REAL>(&config.b)->default_value(0), "y-distance from centerline to sensor")
             ("std_encoder", value<REAL>(&config.stdEncoder)->default_value(0), "Std. deviation of velocity noise")
             ("std_alpha", value<REAL>(&config.stdAlpha)->default_value(0), "Std. deviation of steering angle noise")
-            ("std_vx", value<REAL>(&config.stdVx)->default_value(0), "Std. deviation of x process noise in constant position model")
-            ("std_vy", value<REAL>(&config.stdVy)->default_value(0), "Std. deviation of y process noise in constant position model")
+            ("std_vx_features", value<REAL>(&config.stdVxMap)->default_value(0), "Std. deviation of x process noise in constant position model")
+            ("std_vy_features", value<REAL>(&config.stdVyMap)->default_value(0), "Std. deviation of y process noise in constant position model")
+            ("std_ax_features", value<REAL>(&config.stdAxMap)->default_value(0), "Std. deviation of x process noise in constant velocity model for targets")
+            ("std_ay_features", value<REAL>(&config.stdAyMap)->default_value(0), "Std. deviation of y process noise in constant velocity model for targets")
             ("cov_vx_birth", value<REAL>(&config.covVxBirth)->default_value(0), "Birth covariance of x velocity in dynamic targets")
             ("cov_vy_birth", value<REAL>(&config.covVyBirth)->default_value(0), "Birth covariance of y velocity in dynamic targets")
             ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
@@ -785,7 +798,7 @@ int main(int argc, char *argv[])
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
-    ParticleSLAM particlesPreMerge(particles) ;
+    ParticleSLAM<Gaussian4D> particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
     vector<Gaussian4D> expectedMap ;
     vector<REAL> cn_estimate ;

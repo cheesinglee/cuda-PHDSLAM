@@ -11,7 +11,8 @@ HEADERS += \
     src/slamparams.h \
     src/slamtypes.h \
     src/rng.h \
-    src/device_math.cuh
+    src/device_math.cuh \
+    src/phdfilter.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -23,6 +24,7 @@ DESTDIR = $$PROJECT_DIR/bin
 
 QMAKE_CXXFLAGS += -DDEBUG
 QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissive -fno-strict-aliasing
+QMAKE_CXXFLAGEs += -j4
 
 # remove qt libs
 CONFIG += dll

@@ -146,9 +146,13 @@ typedef struct{
     REAL clutterDensity ;
     REAL pd ;
 
-    // constant position process noise
-    REAL stdVx ;
-    REAL stdVy ;
+    // constant position process noise for targets
+    REAL stdVxMap ;
+    REAL stdVyMap ;
+
+    // constant velocity process noise for targets
+    REAL stdAxMap ;
+    REAL stdAyMap ;
 
     // birth covariance for unobserved velocity terms
     REAL covVxBirth ;
@@ -201,36 +205,32 @@ public:
     vector<ConstantVelocityState> states ;
     vector<vector<GaussianType> > maps ;
     vector< vector<REAL> > cardinalities ;
-    vector<char> compatibleZ ;
     vector<REAL> cardinality_birth ;
 
-    ParticleSLAM(unsigned int n = 100)
+    ParticleSLAM<GaussianType>(unsigned int n = 100)
     :
       nParticles(n),
       weights(n),
       states(n),
       maps(n),
       cardinalities(n),
-      compatibleZ(),
       cardinality_birth()
     {
     }
-    ParticleSLAM(const ParticleSLAM &ps)
+    ParticleSLAM<GaussianType>(const ParticleSLAM<GaussianType> &ps)
     {
         nParticles = ps.nParticles ;
         states = ps.states ;
         maps = ps.maps ;
         weights = ps.weights ;
-        compatibleZ = ps.compatibleZ ;
         cardinalities = ps.cardinalities ;
     }
-    ParticleSLAM operator=(const ParticleSLAM ps)
+    ParticleSLAM<GaussianType> operator=(const ParticleSLAM<GaussianType> ps)
     {
         nParticles = ps.nParticles ;
         states = ps.states ;
         maps = ps.maps ;
         weights = ps.weights ;
-        compatibleZ = ps.compatibleZ ;
         cardinalities = ps.cardinalities ;
         return *this ;
     }
