@@ -626,6 +626,7 @@ void loadConfig(const char* filename)
             ("gate_births", value<bool>(&config.gateBirths)->default_value(true), "Enable measurement gating on births")
             ("gate_measurements", value<bool>(&config.gateMeasurements)->default_value(true), "Gate measurements for update")
             ("gate_threshold", value<REAL>(&config.gateThreshold)->default_value(10), "Mahalanobis distance threshold for gating")
+            ("dynamic_features", value<bool>(&config.dynamicFeatures)->default_value(false), "Use dynamic model for map features")
             ("min_expected_feature_weight", value<REAL>(&config.minExpectedFeatureWeight)->default_value(0.33), "Minimum feature weight for expected map")
             ("min_separation", value<REAL>(&config.minSeparation)->default_value(5), "Minimum Mahalanobis separation between features")
             ("max_features", value<int>(&config.maxFeatures)->default_value(100), "Maximum number of features in map")
@@ -760,7 +761,12 @@ int main(int argc, char *argv[])
         nSteps = config.maxSteps ;
 
     // initialize particles
-    ParticleSLAM<Gaussian4D> particles( config.nParticles ) ;
+    if (config.dynamicFeatures)
+        typedef FeatureType Gaussian4D ;
+    else
+        typedef FeatureType Gaussian2D ;
+
+    ParticleSLAM<FeatureType> particles(config.nParticles) ;
     for (int n = 0 ; n < config.nParticles ; n++ )
     {
         particles.states[n].px = config.x0 ;
@@ -798,9 +804,9 @@ int main(int argc, char *argv[])
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
-    ParticleSLAM<Gaussian4D> particlesPreMerge(particles) ;
+    ParticleSLAM<FeatureType> particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
-    vector<Gaussian4D> expectedMap ;
+    vector<FeatureType> expectedMap ;
     vector<REAL> cn_estimate ;
     REAL nEff ;
     timeval start, stop ;

@@ -159,11 +159,11 @@ typedef struct{
     REAL covVyBirth ;
 
     int nParticles ;
-	int nPredictParticles ;
+    int nPredictParticles ;
     int subdividePredict ;
     REAL resampleThresh ;
     REAL birthWeight ;
-	REAL birthNoiseFactor ;
+    REAL birthNoiseFactor ;
     bool gateBirths ;
     bool gateMeasurements ;
     REAL gateThreshold ;
@@ -172,12 +172,13 @@ typedef struct{
     int maxFeatures ;
     REAL minFeatureWeight ;
     int particleWeighting ;
-	int daughterMixtureType ;
-	int nDaughterParticles ;
-	int maxCardinality ;
-	int filterType ;
-	int distanceMetric ;
+    int daughterMixtureType ;
+    int nDaughterParticles ;
+    int maxCardinality ;
+    int filterType ;
+    int distanceMetric ;
     int maxSteps ;
+    bool dynamicFeatures ;
 
     int motionType ;
     int mapEstimate ;
