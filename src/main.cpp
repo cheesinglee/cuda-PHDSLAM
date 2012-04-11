@@ -29,6 +29,7 @@
 
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
+#include <boost/type_traits/conditional.hpp>
 
 //#define DEBUG
 
@@ -82,6 +83,9 @@ SlamConfig config ;
 
 // device memory limit
 size_t deviceMemLimit ;
+
+// configuration file
+std::string config_filename ;
 
 // measurement datafile
 std::string measurementsFilename ;
@@ -455,7 +459,8 @@ ParticleSLAM<Gaussian4D> loadParticles(std::string filename)
 
 template<class GaussianType>
 void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState expectedPose,
-                                vector<GaussianType> expectedMap, vector<REAL> cn_estimate, int t)
+                                vector<GaussianType> expectedMap, vector<int> idx_resample,
+                                vector<REAL> cn_estimate, int t)
 {
         // create the filename
         std::ostringstream oss ;
@@ -523,6 +528,13 @@ void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState
                           << particles.states[n].vy << " "
                           << particles.states[n].vtheta << " " ;
             }
+        }
+        stateFile << endl ;
+
+        // resample indices
+        for ( int n = 0 ; n < particles.nParticles ; n++ )
+        {
+            stateFile << idx_resample[n] << " " ;
         }
         stateFile << endl ;
 
@@ -693,33 +705,12 @@ void loadConfig(const char* filename)
 
 }
 
-int main(int argc, char *argv[])
+template<class GaussianType>
+void do_simulation()
 {
+    // time variables
     time_t rawtime ;
     struct tm *timeinfo ;
-
-    // check cuda device properties
-    int nDevices ;
-    cudaGetDeviceCount( &nDevices ) ;
-    cout << "Found " << nDevices << " CUDA Devices" << endl ;
-    cudaDeviceProp props ;
-    cudaGetDeviceProperties( &props, 0 ) ;
-    cout << "Device name: " << props.name << endl ;
-    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
-    deviceMemLimit = props.totalGlobalMem*0.95 ;
-    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
-
-//	cudaPrintfInit() ;
-
-    // load the configuration file
-    if ( argc < 2 )
-    {
-        cout << "missing configuration file argument" << endl ;
-        exit(1) ;
-    }
-    DEBUG_MSG("Loading configuration file") ;
-    loadConfig( argv[1] ) ;
-    setDeviceConfig( config ) ;
 
     // load measurement data
     std::vector<measurementSet> allMeasurements ;
@@ -760,13 +751,8 @@ int main(int argc, char *argv[])
     if (nSteps > config.maxSteps && config.maxSteps > 0)
         nSteps = config.maxSteps ;
 
-    // initialize particles
-    if (config.dynamicFeatures)
-        typedef FeatureType Gaussian4D ;
-    else
-        typedef FeatureType Gaussian2D ;
-
-    ParticleSLAM<FeatureType> particles(config.nParticles) ;
+    // initialize particless
+    ParticleSLAM<GaussianType> particles(config.nParticles) ;
     for (int n = 0 ; n < config.nParticles ; n++ )
     {
         particles.states[n].px = config.x0 ;
@@ -781,6 +767,10 @@ int main(int argc, char *argv[])
             particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
         }
     }
+
+    // vector to keep track of resamplings
+    vector<int> idx_resample(config.nParticles) ;
+
     if ( config.filterType == CPHD_TYPE )
     {
             particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
@@ -795,7 +785,7 @@ int main(int argc, char *argv[])
     mkdir(timestamp, S_IRWXU) ;
     // copy the configuration file into the log directory
     string copy_command("cp ") ;
-    copy_command += argv[1] ;
+    copy_command += config_filename ;
     copy_command += " " ;
     copy_command += timestamp ;
     system(copy_command.c_str()) ;
@@ -804,9 +794,9 @@ int main(int argc, char *argv[])
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
-    ParticleSLAM<FeatureType> particlesPreMerge(particles) ;
+    ParticleSLAM<GaussianType> particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
-    vector<FeatureType> expectedMap ;
+    vector<GaussianType> expectedMap ;
     vector<REAL> cn_estimate ;
     REAL nEff ;
     timeval start, stop ;
@@ -827,6 +817,18 @@ int main(int argc, char *argv[])
         DEBUG_MSG("Initializing CPHD constants") ;
         initCphdConstants() ;
     }
+
+    // check cuda device properties
+    int nDevices ;
+    cudaGetDeviceCount( &nDevices ) ;
+    cout << "Found " << nDevices << " CUDA Devices" << endl ;
+    cudaDeviceProp props ;
+    cudaGetDeviceProperties( &props, 0 ) ;
+    cout << "Device name: " << props.name << endl ;
+    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
+    deviceMemLimit = props.totalGlobalMem*0.95 ;
+    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
+
     for (int n = 0 ; n < nSteps ; n++ )
     {
         gettimeofday( &start, NULL ) ;
@@ -899,8 +901,8 @@ int main(int argc, char *argv[])
             }
         }
 
-        // need measurments from current time step for update
-        if ( (ZZ.size() > 0) )//&& (n % 4 == 0) )
+        // need measurements from current time step for update
+        if ( (ZZ.size() > 0) )
         {
             cout << "Performing PHD Update" << endl ;
             particlesPreMerge = phdUpdate(particles, ZZ) ;
@@ -910,7 +912,7 @@ int main(int argc, char *argv[])
 
 #ifdef DEBUG
         DEBUG_MSG( "Writing Log" ) ;
-        writeLog(particles, expectedPose, expectedMap, cn_estimate, n) ;
+        writeLog(particles, expectedPose, expectedMap, idx_resample, cn_estimate, n) ;
 //                writeParticles(particles,"particles",n) ;
 #endif
 
@@ -919,11 +921,17 @@ int main(int argc, char *argv[])
             nEff += exp(2*particles.weights[i]) ;
         nEff = 1.0/nEff/particles.nParticles ;
         DEBUG_VAL(nEff) ;
-        // vector<int> resample_indices(particles.nParticles) ;
         if (nEff <= config.resampleThresh && ZZ.size() > 0 )
         {
             DEBUG_MSG("Resampling particles") ;
-            particles = resampleParticles(particles,config.nParticles) ;
+            particles = resampleParticles(particles,config.nParticles,idx_resample) ;
+        }
+        else
+        {
+            for ( int i = 0 ; i < particles.nParticles ; i++ )
+            {
+                idx_resample[i] = i ;
+            }
         }
         ZPrev = ZZ ;
         gettimeofday( &stop, NULL ) ;
@@ -948,5 +956,24 @@ int main(int argc, char *argv[])
     system( command.c_str() ) ;
 #endif
     cout << "DONE!" << endl ;
+}
+
+int main(int argc, char *argv[])
+{
+    // load the configuration file
+    if ( argc < 2 )
+    {
+        cout << "missing configuration file argument" << endl ;
+        exit(1) ;
+    }
+    DEBUG_MSG("Loading configuration file") ;
+    config_filename = argv[1] ;
+    loadConfig( config_filename.data() ) ;
+    setDeviceConfig( config ) ;
+
+    if (config.dynamicFeatures)
+        do_simulation<Gaussian4D>() ;
+    else
+        do_simulation<Gaussian2D>() ;
     return 0 ;
 }

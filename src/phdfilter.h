@@ -21,7 +21,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements) ;
 
 template<class GaussianType>
 ParticleSLAM<GaussianType>
-resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles=-1 ) ;
+resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles, vector<int>& idx_resample ) ;
 
 template<class GaussianType>
 void

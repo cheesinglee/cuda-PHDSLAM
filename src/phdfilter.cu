@@ -59,6 +59,10 @@ initCphdConstants() ;
 
 template<class GaussianType>
 void
+predictMap(ParticleSLAM<GaussianType>& p) ;
+
+template<class GaussianType>
+void
 phdPredict(ParticleSLAM<GaussianType>& particles, ... ) ;
 
 template<class GaussianType>
@@ -565,6 +569,55 @@ predictMapKernel(GaussianType* features_prior, MotionModelType model,
     }
 }
 
+template<class GaussianType>
+void
+predictMap(ParticleSLAM<GaussianType>& particles)
+{
+    vector<GaussianType> all_features = combineFeatures<GaussianType>(particles) ;
+    int n_features = all_features.size() ;
+    GaussianType* dev_features_prior = NULL ;
+    GaussianType* dev_features_predict = NULL ;
+    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_prior,
+                              n_features*sizeof(GaussianType) ) ) ;
+    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_predict,
+                              n_features*sizeof(GaussianType) ) ) ;
+    CUDA_SAFE_CALL(cudaMemcpy(dev_features_prior,&all_features[0],
+                              n_features*sizeof(GaussianType),
+                              cudaMemcpyHostToDevice) ) ;
+    int n_blocks = (n_features+255)/256 ;
+    ConstantVelocityMotionModel motion_model ;
+    motion_model.std_accx = config.stdAxMap ;
+    motion_model.std_accy = config.stdAyMap ;
+    predictMapKernel<<<n_blocks,256>>>
+        (dev_features_prior,motion_model,n_features, dev_features_predict ) ;
+    CUDA_SAFE_CALL(cudaMemcpy(&all_features[0],dev_features_predict,
+                              n_features*sizeof(GaussianType),
+                              cudaMemcpyDeviceToHost)) ;
+    // load predicted features back into particles
+    GaussianType* begin = &all_features[0] ;
+    GaussianType* end = begin
+            + particles.maps[0].size() ;
+    for ( int n = 0 ; n < particles.nParticles ; n++ )
+    {
+        particles.maps[n].assign(begin,end) ;
+        if ( n < particles.nParticles - 1)
+        {
+            begin = end ;
+            end += particles.maps[n+1].size() ;
+        }
+    }
+    CUDA_SAFE_CALL( cudaFree( dev_features_prior ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_features_predict ) ) ;
+}
+
+template<>
+void
+predictMap<Gaussian2D>(ParticleSLAM<Gaussian2D>& p)
+{
+    // do nothing
+}
+
+
 /// host-side helper function for PHD filter prediction
 template <class GaussianType>
 void
@@ -755,40 +808,7 @@ phdPredict(ParticleSLAM<GaussianType>& particles, ... )
         particles.nParticles = nPredict ;
     }
 
-    //----------- map features prediction -------------//
-    ConstantVelocityMotionModel motion_model ;
-    motion_model.std_accx = config.stdAxMap ;
-    motion_model.std_accy = config.stdAyMap ;
-    vector<Gaussian4D> all_features = combineFeatures<Gaussian4D>(particles) ;
-    int n_features = all_features.size() ;
-    Gaussian4D* dev_features_prior = NULL ;
-    Gaussian4D* dev_features_predict = NULL ;
-    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_prior,
-                              n_features*sizeof(Gaussian4D) ) ) ;
-    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_predict,
-                              n_features*sizeof(Gaussian4D) ) ) ;
-    CUDA_SAFE_CALL(cudaMemcpy(dev_features_prior,&all_features[0],
-                              n_features*sizeof(Gaussian4D),
-                              cudaMemcpyHostToDevice) ) ;
-    int n_blocks = (n_features+255)/256 ;
-    predictMapKernel<<<n_blocks,256>>>
-        (dev_features_prior,motion_model,n_features, dev_features_predict ) ;
-    CUDA_SAFE_CALL(cudaMemcpy(&all_features[0],dev_features_predict,
-                              n_features*sizeof(Gaussian4D),
-                              cudaMemcpyDeviceToHost)) ;
-    // load predicted features back into particles
-    vector<Gaussian4D>::iterator it_begin = all_features.begin() ;
-    vector<Gaussian4D>::iterator it_end = all_features.begin()
-            + particles.maps[0].size() ;
-    for ( int n = 0 ; n < particles.nParticles ; n++ )
-    {
-        particles.maps[n].assign(it_begin,it_end) ;
-        if ( n < particles.nParticles - 1)
-        {
-            it_begin = it_end ;
-            it_end += particles.maps[n+1].size() ;
-        }
-    }
+    predictMap(particles) ;
 
     // log time
     cudaEventRecord( stop,0 ) ;
@@ -802,8 +822,6 @@ phdPredict(ParticleSLAM<GaussianType>& particles, ... )
     // clean up
     CUDA_SAFE_CALL( cudaFree( dev_states_prior ) ) ;
     CUDA_SAFE_CALL( cudaFree( dev_states_predict ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_features_prior ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_features_predict ) ) ;
     free(states_predict) ;
 }
 
@@ -1454,11 +1472,11 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
         track of which features have already be merged.
     \param particleWeights New particle weights after PHD update
   */
-
+template<class GaussianType>
 __global__ void
-phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
+phdUpdateKernel(GaussianType *inRangeFeatures, int* map_offsets,
         int nParticles, int n_measure, ConstantVelocityState* poses,
-        Gaussian2D *updated_features,
+        GaussianType *updated_features,
         bool *mergedFlags, REAL *particleWeights )
 {
     // shared memory variables
@@ -1541,14 +1559,9 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
 
                     // save the non-detection term
                     int nonDetectIdx = update_offset + feature_idx ;
+                    copy_gaussians(feature,updated_features[nonDetectIdx]) ;
                     REAL nonDetectWeight = feature.weight * (1-featurePd) ;
                     updated_features[nonDetectIdx].weight = nonDetectWeight ;
-                    updated_features[nonDetectIdx].mean[0] = feature.mean[0] ;
-                    updated_features[nonDetectIdx].mean[1] = feature.mean[1] ;
-                    updated_features[nonDetectIdx].cov[0] = feature.cov[0] ;
-                    updated_features[nonDetectIdx].cov[1] = feature.cov[1] ;
-                    updated_features[nonDetectIdx].cov[2] = feature.cov[2] ;
-                    updated_features[nonDetectIdx].cov[3] = feature.cov[3] ;
                     if ( nonDetectWeight >= dev_config.minFeatureWeight )
                         mergedFlags[nonDetectIdx] = false ;
                     else
@@ -1583,6 +1596,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     updated_features[updateIdx].weight = dev_config.birthWeight ;
                     updated_features[updateIdx].mean[0] = pose.px + dx ;
                     updated_features[updateIdx].mean[1] = pose.py + dy ;
+                    // upper 2x2 block of covariance matrix = K*R*K'
                     updated_features[updateIdx].cov[0] = pow(K[0],2)*var_range +
                             pow(K[2],2)*var_bearing ;
                     updated_features[updateIdx].cov[1] = K[0]*K[1]*var_range +
@@ -1592,10 +1606,6 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     updated_features[updateIdx].cov[3] = pow(K[1],2)*var_range +
                             pow(K[3],2)*var_bearing ;
 
-                    // compute pre-update components for newborn feature
-                    computePreUpdateComponents( pose, feature, K, covUpdate,
-                                                &detSigma, sigmaInv, &featurePd,
-                                                &z_predict ) ;
                     // set Pd to 1 for newborn features
                     featurePd = 1 ;
                     // no non-detection term for newborn features
@@ -1604,11 +1614,9 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                 {
                     // thread does not correspond to a feature
                     featurePd = 0 ;
-                    feature.weight = 0 ;
-                    covUpdate[0] = 0 ;
-                    covUpdate[1] = 0 ;
-                    covUpdate[2] = 0 ;
-                    covUpdate[3] = 0 ;
+                    feature.weight = -FLT_MAX ;
+                    for (int i = 0 ; i < 16 ; i++)
+                        covUpdate[i] = 0 ;
                 }
 
                 // predicted cardinality = sum of weights*pd
@@ -1644,9 +1652,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
 
                         // Gating for measurement update
                         if ( dev_config.gateMeasurements && dist > dev_config.gateThreshold)
-                            dist = FLT_MAX ;
+                            dist = 123456.789 ;
 
                         // partially updated weight
+                        w_partial = 66666666 ;
                         if ( featurePd > 0 )
                         {
                             logLikelihood = safeLog(featurePd) + safeLog(feature.weight)
@@ -1655,16 +1664,19 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                         }
                         else
                         {
-                            w_partial = -FLT_MAX ;
+                            w_partial = -123456.789 ;
                         }
                         // save updated gaussian with partially updated weight
+//                        if (map_idx == 13)
+//                            cuPrintf("[%d,%d,%f,%f,%f,%f,%f]\n",tid,updateIdx,featurePd,feature.weight,dist,detSigma,w_partial) ;
                         updated_features[updateIdx].weight = w_partial ;
-                        updated_features[updateIdx].mean[0] = meanUpdate[0] ;
-                        updated_features[updateIdx].mean[1] = meanUpdate[1] ;
-                        updated_features[updateIdx].cov[0] = covUpdate[0] ;
-                        updated_features[updateIdx].cov[1] = covUpdate[1] ;
-                        updated_features[updateIdx].cov[2] = covUpdate[2] ;
-                        updated_features[updateIdx].cov[3] = covUpdate[3] ;
+                        for ( int j = 0 ; j < 4 ; j++)
+                        {
+                            if(j < 2)
+                                updated_features[updateIdx].mean[j] = meanUpdate[j] ;
+                            updated_features[updateIdx].cov[j] = covUpdate[j] ;
+                        }
+//                        force_symmetric_covariance(updated_features[updateIdx]) ;
                     }
                 }
             }
@@ -1718,6 +1730,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
             }
 
             // compute the weight normalizers
+            __syncthreads() ;
             for ( int i = 0 ; i < n_measure ; i++ )
             {
                 REAL log_normalizer = 0 ;
@@ -1729,7 +1742,7 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
                     {
                         int feature_idx = j+tid ;
-                        if ( feature_idx < (n_features) )
+                        if ( feature_idx < n_features )
                         {
                             updateIdx = update_offset + n_features + i*n_features + feature_idx ;
                             w_partial = updated_features[updateIdx].weight ;
@@ -1744,10 +1757,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     }
 
                     // do the exponent sum
-                    for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
+                    for ( int j = 0 ; j < n_features ; j += blockDim.x )
                     {
                         int feature_idx = j+tid ;
-                        if ( feature_idx < (n_features) )
+                        if ( feature_idx < n_features )
                         {
                             updateIdx = update_offset + n_features + i*n_features + feature_idx ;
                             w_partial = exp(updated_features[updateIdx].weight-val) ;
@@ -1769,6 +1782,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
 
                     // put back in log form
                     log_normalizer = safeLog(sum) ;
+//                    if (log_normalizer > 0)
+//                    {
+//                        cuPrintf("sum = %f\n",sum) ;
+//                    }
                 }
                 else
                 {
@@ -1778,7 +1795,35 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
 
                 // update the pose particle weights
                 if ( tid == 0 && dev_config.particleWeighting == 0 )
+                {
                     particle_weight += log_normalizer ;
+                    if (particle_weight > 0 && map_idx==13 && i == 0)
+                    {
+                        cuPrintf("n_features = %d\n",n_features) ;
+                        cuPrintf("update_offset = %d\n",update_offset) ;
+//                        cuPrintf("map_offsets=[%d",map_offsets[0]) ;
+//                        for ( int k = 1 ; k < gridDim.x ; k++ )
+//                        {
+//                            cuPrintf(", %d",map_offsets[k]) ;
+//                        }
+//                        cuPrintf("]\n") ;
+//                        for ( int k = 0 ; k < n_update ; k++ )
+//                        {
+//                            cuPrintf("[%d,%d,%d, %f,%f,%f,%f,%f]\n",map_idx,i,k,
+//                                     updated_features[update_offset+k].weight,
+//                                     updated_features[update_offset+k].mean[0],
+//                                     updated_features[update_offset+k].mean[1],
+//                                     updated_features[update_offset+k].mean[2],
+//                                     updated_features[update_offset+k].mean[3]) ;
+//                            cuPrintf("cov_update[%d] = [%f",k,updated_features[update_offset+k].cov[0]) ;
+//                            for ( int l = 1 ; l < 16 ; l++ )
+//                            {
+//                                cuPrintf(", %f",updated_features[update_offset+k].cov[l]) ;
+//                            }
+//                            cuPrintf("]\n") ;
+//                        }
+                    }
+                }
                 __syncthreads() ;
 
                 // compute final feature weights
@@ -1794,13 +1839,9 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                         // check if updated feature should be retained for
                         // GM merging step
                         if ( weightUpdate >= dev_config.minFeatureWeight)
-                        {
                             mergedFlags[updateIdx] = false ;
-                        }
                         else
-                        {
                             mergedFlags[updateIdx] = true ;
-                        }
                     }
                     else if ( feature_idx == n_features )
                     {
@@ -1811,13 +1852,9 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                         // check if updated feature should be retained for
                         // GM merging step
                         if ( weightUpdate >= dev_config.minFeatureWeight)
-                        {
                             mergedFlags[updateIdx] = false ;
-                        }
                         else
-                        {
                             mergedFlags[updateIdx] = true ;
-                        }
                     }
                 }
             }
@@ -1871,41 +1908,11 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     particleWeights[map_idx] = n_measure*safeLog(dev_config.clutterDensity)
                             + cn_update - cn_predict
                             - dev_config.clutterRate  ;
-//                    particleWeights[map_idx] = cardinality_updated
-//                            - cardinality_predict ;
                 }
             }
             // Single-Feature IID cluster assumption
             else if ( dev_config.particleWeighting == 2 )
             {
-//                REAL cn_predict = 0 ;
-//                REAL cn_update = 0 ;
-
-//                // predicted cardinality
-//                for ( int i = 0 ; i < n_features ; i+= blockDim.x)
-//                {
-//                    if ( tid + i < n_features )
-//                        w_partial = inRangeFeatures[predict_offset+i+tid].weight ;
-//                    else
-//                        w_partial = 0.0f ;
-//                    sumByReduction(sdata,w_partial,tid);
-//                    cn_predict += sdata[0] ;
-//                    __syncthreads() ;
-//                }
-
-//                // updated cardinality = sum of updated weights
-//                for ( int i = 0 ; i < n_update ; i += blockDim.x )
-//                {
-//                    if ( tid + i < n_update )
-//                        w_partial = updated_features[update_offset+i+tid].weight ;
-//                    else
-//                        w_partial = 0.0f ;
-//                    sumByReduction( sdata, w_partial, tid );
-//                    if ( tid == 0 )
-//                        cn_update += sdata[0] ;
-//                    __syncthreads() ;
-//                }
-
                 if ( tid == 0 )
                 {
                     // thread 0 updates the pose particle weight
@@ -1913,10 +1920,6 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
                     for ( int i = 0 ; i <= n_measure ; i++ )
                         w_partial += updated_features[update_offset + i*n_features + max_feature].weight ;
                     REAL log_den = safeLog(w_partial) ;
-//                    REAL log_den = safeLog(w_partial)
-//                            + cn_predict - cn_update + dev_config.clutterRate ;
-//                    REAL log_den = n_measure*safeLog(dev_config.clutterDensity)
-//                            + safeLog(updated_features[update_offset+max_feature].weight) ;
                     particleWeights[map_idx] = safeLog(particle_weight) - log_den ;
                 }
             }
@@ -1924,8 +1927,10 @@ phdUpdateKernel(Gaussian2D *inRangeFeatures, int* map_offsets,
     }
 }
 
+// specialized phdUpdateKernel for 4D dynamic featuress
+template<>
 __global__ void
-phdUpdateKernelDynamic(Gaussian4D *inRangeFeatures, int* map_offsets,
+phdUpdateKernel<Gaussian4D>(Gaussian4D *inRangeFeatures, int* map_offsets,
         int nParticles, int n_measure, ConstantVelocityState* poses,
         Gaussian4D *updated_features,
         bool *mergedFlags, REAL *particleWeights )
@@ -2626,7 +2631,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
     //------- Variable Declarations ---------//
 
     int n_measure = 0 ;
-    vector<Gaussian4D> concat ;
+    vector<GaussianType> concat ;
     int nParticles = particles.nParticles ;
     vector<int> mapSizes(nParticles,0) ;
     int nThreads = 0 ;
@@ -2750,7 +2755,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
         // allocate device memory
         CUDA_SAFE_CALL(
                     cudaMalloc( (void**)&dev_maps,
-                                totalFeatures*sizeof(Gaussian4D) ) ) ;
+                                totalFeatures*sizeof(GaussianType) ) ) ;
         CUDA_SAFE_CALL(
                     cudaMalloc( (void**)&dev_n_in_range,
                                 nParticles*sizeof(int) ) ) ;
@@ -2764,7 +2769,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 
         // copy inputs
         CUDA_SAFE_CALL(
-            cudaMemcpy( dev_maps, &concat[0], totalFeatures*sizeof(Gaussian4D),
+            cudaMemcpy( dev_maps, &concat[0], totalFeatures*sizeof(GaussianType),
                         cudaMemcpyHostToDevice )
         ) ;
         CUDA_SAFE_CALL(
@@ -2959,7 +2964,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 
     CUDA_SAFE_CALL(
                     cudaMalloc( (void**)&dev_maps_inrange,
-                                n_in_range*sizeof(Gaussian4D) ) ) ;
+                                n_in_range*sizeof(GaussianType) ) ) ;
     CUDA_SAFE_CALL(
                     cudaMalloc( (void**)&dev_map_sizes_inrange,
                                 nParticles*sizeof(int) ) ) ;
@@ -2971,7 +2976,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 //                           nParticles*n_measure*sizeof(char) ) ) ;
     CUDA_SAFE_CALL(
                 cudaMalloc((void**)&dev_maps_updated,
-                           n_update*sizeof(Gaussian4D)) ) ;
+                           n_update*sizeof(GaussianType)) ) ;
     CUDA_SAFE_CALL(
                 cudaMalloc((void**)&dev_particle_weights,
                            nParticles*sizeof(REAL) ) ) ;
@@ -2985,7 +2990,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
     // copy inputs
     CUDA_SAFE_CALL(
         cudaMemcpy( dev_maps_inrange, &features_in[0],
-                    n_in_range*sizeof(Gaussian4D),
+                    n_in_range*sizeof(GaussianType),
                     cudaMemcpyHostToDevice )
     ) ;
     CUDA_SAFE_CALL(
@@ -3007,14 +3012,14 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
     if ( config.filterType == PHD_TYPE )
     {
         DEBUG_MSG("launching phdUpdateKernel") ;
-        cudaPrintfInit(4194304) ;
-        phdUpdateKernelDynamic<<<nBlocks,256>>>
+//        cudaPrintfInit(4194304) ;
+        phdUpdateKernel<<<nBlocks,256>>>
             ( dev_maps_inrange, dev_map_offsets_inrange, nParticles, n_measure,
               dev_poses, dev_maps_updated,
               dev_merged_flags,dev_particle_weights ) ;
         CUDA_SAFE_THREAD_SYNC() ;
-        cudaPrintfDisplay(stdout,false) ;
-        cudaPrintfEnd();
+//        cudaPrintfDisplay(stdout,false) ;
+//        cudaPrintfEnd();
     }
     else if ( config.filterType == CPHD_TYPE )
     {
@@ -3106,7 +3111,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 //                                          dev_n_merged, dev_merged_flags,
 //                                          dev_map_sizes,nParticles);
 
-    Gaussian4D* dev_maps_combined = NULL ;
+    GaussianType* dev_maps_combined = NULL ;
     bool* dev_merged_flags_combined = NULL ;
     size_t combined_size ;
     int offset = 0 ;
@@ -3120,13 +3125,13 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
         {
             mapSizes[n] *= (n_measure+1) ;
         }
-        combined_size = n_update*sizeof(Gaussian4D) ;
+        combined_size = n_update*sizeof(GaussianType) ;
     }
     else
     {
         // recombine updated in-range map with nearly in-range map do merging
         DEBUG_MSG("Recombining maps") ;
-        combined_size = (n_update+n_out_range2)*sizeof(Gaussian4D) ;
+        combined_size = (n_update+n_out_range2)*sizeof(GaussianType) ;
         CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
         CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags_combined,
                                     (n_update+n_out_range2)*sizeof(bool) ) ) ;
@@ -3143,7 +3148,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
             int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
                                         dev_maps_updated+offset_updated,
-                                        n_in_range_n*sizeof(Gaussian4D),
+                                        n_in_range_n*sizeof(GaussianType),
                                         cudaMemcpyDeviceToDevice) ) ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
                                         dev_merged_flags+offset_updated,
@@ -3156,7 +3161,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
             vector<char> merged_flags_out(n_out_range2_vec[n],0) ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
                                         &features_out2[offset_out],
-                                        n_out_range2_vec[n]*sizeof(Gaussian4D),
+                                        n_out_range2_vec[n]*sizeof(GaussianType),
                                         cudaMemcpyHostToDevice ) ) ;
             CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
                                         &merged_flags_out[0],
@@ -3188,8 +3193,8 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 
     // allocate outputs
     DEBUG_MSG("Allocating update and merge outputs") ;
-    maps_merged = (Gaussian4D*)malloc( combined_size ) ;
-    maps_updated = (Gaussian4D*)malloc( combined_size ) ;
+    maps_merged = (GaussianType*)malloc( combined_size ) ;
+    maps_updated = (GaussianType*)malloc( combined_size ) ;
     map_sizes_merged = (int*)malloc( nParticles*sizeof(int) ) ;
 //    char* compatible_z = (char*)malloc( nParticles*n_measure*sizeof(char) ) ;
 
@@ -3340,7 +3345,7 @@ phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements)
 }
 
 template <class GaussianType>
-ParticleSLAM<GaussianType> resampleParticles( ParticleSLAM<GaussianType> oldParticles, int n_new_particles)
+ParticleSLAM<GaussianType> resampleParticles( ParticleSLAM<GaussianType> oldParticles, int n_new_particles, vector<int>& idx_resample )
 {
     if ( n_new_particles < 0 )
     {
@@ -3354,6 +3359,7 @@ ParticleSLAM<GaussianType> resampleParticles( ParticleSLAM<GaussianType> oldPart
     double interval = 1.0/n_new_particles ;
     double r = randu01() * interval ;
     double c = exp(oldParticles.weights[0]) ;
+    idx_resample.resize(n_new_particles, 0) ;
     int i = 0 ;
 //	DEBUG_VAL(interval) ;
     for ( int j = 0 ; j < n_new_particles ; j++ )
@@ -3395,6 +3401,7 @@ ParticleSLAM<GaussianType> resampleParticles( ParticleSLAM<GaussianType> oldPart
         newParticles.states[j] = oldParticles.states[i] ;
         newParticles.maps[j] = oldParticles.maps[i] ;
         newParticles.cardinalities[j] = oldParticles.cardinalities[i] ;
+        idx_resample[j] = i ;
         r += interval ;
         //resample_indices[j] = i ;
     }
@@ -3427,21 +3434,21 @@ vector<GaussianType> computeExpectedMap(ParticleSLAM<GaussianType> particles)
         vector<GaussianType> expected_map(0) ;
         return expected_map ;
     }
-    Gaussian4D* all_features = (Gaussian4D*)malloc( total_features*sizeof(Gaussian4D) ) ;
+    GaussianType* all_features = (GaussianType*)malloc( total_features*sizeof(GaussianType) ) ;
     std::copy( concat.begin(), concat.end(), all_features ) ;
-    bool* merged_flags = (bool*)malloc( total_features*sizeof(sizeof(Gaussian4D) ) ) ;
+    bool* merged_flags = (bool*)malloc( total_features*sizeof(sizeof(GaussianType) ) ) ;
     std::fill( merged_flags, merged_flags+total_features, false ) ;
-    Gaussian4D* maps_out = (Gaussian4D*)malloc( total_features*sizeof(Gaussian4D) ) ;
+    GaussianType* maps_out = (GaussianType*)malloc( total_features*sizeof(GaussianType) ) ;
 
-    Gaussian4D* dev_maps_in = NULL ;
-    Gaussian4D* dev_maps_out = NULL ;
+    GaussianType* dev_maps_in = NULL ;
+    GaussianType* dev_maps_out = NULL ;
     int* dev_merged_sizes = NULL ;
     bool* dev_merged_flags = NULL ;
     int* dev_map_sizes = NULL ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_in,
-                                total_features*sizeof(Gaussian4D) ) ) ;
+                                total_features*sizeof(GaussianType) ) ) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_out,
-                                total_features*sizeof(Gaussian4D) ) ) ;
+                                total_features*sizeof(GaussianType) ) ) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_sizes,
                                 particles.nParticles*sizeof(int) ) ) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_map_sizes,
@@ -3457,7 +3464,7 @@ vector<GaussianType> computeExpectedMap(ParticleSLAM<GaussianType> particles)
                                     n*sizeof(int),
                                     cudaMemcpyHostToDevice ) ) ;
         CUDA_SAFE_CALL( cudaMemcpy( dev_maps_in, all_features,
-                                    total_features*sizeof(Gaussian4D),
+                                    total_features*sizeof(GaussianType),
                                     cudaMemcpyHostToDevice) ) ;
         CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags, merged_flags,
                                     total_features*sizeof(bool),
@@ -3467,7 +3474,7 @@ vector<GaussianType> computeExpectedMap(ParticleSLAM<GaussianType> particles)
                                          dev_merged_flags, dev_map_sizes, n ) ;
 
         CUDA_SAFE_CALL( cudaMemcpy( maps_out, dev_maps_out,
-                                    total_features*sizeof(Gaussian4D),
+                                    total_features*sizeof(GaussianType),
                                     cudaMemcpyDeviceToHost) ) ;
         CUDA_SAFE_CALL( cudaMemcpy( merged_sizes, dev_merged_sizes,
                                     n*sizeof(int), cudaMemcpyDeviceToHost ) ) ;
@@ -3497,7 +3504,8 @@ vector<GaussianType> computeExpectedMap(ParticleSLAM<GaussianType> particles)
     return expected_map ;
 }
 
-bool expectedFeaturesPredicate( Gaussian4D g )
+template<class GaussianType>
+bool expectedFeaturesPredicate( GaussianType g )
 {
     return (g.weight <= config.minExpectedFeatureWeight) ;
 }
@@ -3580,9 +3588,24 @@ setDeviceConfig( const SlamConfig& config )
 }
 
 //--- explicitly instantiate templates so linking works correctly
+template void predictMap<Gaussian4D>(ParticleSLAM<Gaussian4D>& p) ;
+template void predictMap<Gaussian2D>(ParticleSLAM<Gaussian2D>& p) ;
+
 template void phdPredict<Gaussian4D>(ParticleSLAM<Gaussian4D>& p,...) ;
+template void phdPredict<Gaussian2D>(ParticleSLAM<Gaussian2D>& p,...) ;
+
 template ParticleSLAM<Gaussian4D> phdUpdate<Gaussian4D>(ParticleSLAM<Gaussian4D>& p, measurementSet Z) ;
+template ParticleSLAM<Gaussian2D> phdUpdate<Gaussian2D>(ParticleSLAM<Gaussian2D>& p, measurementSet Z) ;
+
 template void recoverSlamState<Gaussian4D>(ParticleSLAM<Gaussian4D> p,
     ConstantVelocityState& pose, vector<Gaussian4D>& map_est, vector<REAL>& cn) ;
+template void recoverSlamState<Gaussian2D>(ParticleSLAM<Gaussian2D> p,
+    ConstantVelocityState& pose, vector<Gaussian2D>& map_est, vector<REAL>& cn) ;
+
 template __global__ void predictMapKernel<Gaussian4D, ConstantVelocityMotionModel>(Gaussian4D* prior, ConstantVelocityMotionModel model, int n, Gaussian4D* predict) ;
-template ParticleSLAM<Gaussian4D> resampleParticles<Gaussian4D>(ParticleSLAM<Gaussian4D> old, int n) ;
+template __global__ void predictMapKernel<Gaussian2D, ConstantPositionMotionModel>(Gaussian2D* prior, ConstantPositionMotionModel model, int n, Gaussian2D* predict) ;
+
+template ParticleSLAM<Gaussian4D> resampleParticles<Gaussian4D>(ParticleSLAM<Gaussian4D> old, int n, vector<int>& idx_resample) ;
+template ParticleSLAM<Gaussian2D> resampleParticles<Gaussian2D>(ParticleSLAM<Gaussian2D> old, int n, vector<int>& idx_resample) ;
+
+//--- End template specialization
