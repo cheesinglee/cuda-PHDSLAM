@@ -158,7 +158,14 @@ typedef struct{
     REAL covVxBirth ;
     REAL covVyBirth ;
 
-    int nParticles ;
+    // probability of survival
+    REAL ps ;
+
+    // jump markov parameters
+    REAL tau ;
+    REAL beta ;
+
+    int n_particles ;
     int nPredictParticles ;
     int subdividePredict ;
     REAL resampleThresh ;
@@ -195,44 +202,51 @@ typedef struct{
 } SlamConfig ;
 
 //typedef vector<PoseParticle> ParticleVector ;
-typedef vector<Gaussian2D> gaussianMixture ;
+typedef vector<Gaussian2D> GaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
 
-template<class GaussianType>
 class ParticleSLAM{
 public:
-    int nParticles ;
+    int n_particles ;
     vector<double> weights ;
     vector<ConstantVelocityState> states ;
-    vector<vector<GaussianType> > maps ;
+    vector<vector<Gaussian2D> > maps_static ;
+    vector<vector<Gaussian4D> > maps_dynamic ;
     vector< vector<REAL> > cardinalities ;
     vector<REAL> cardinality_birth ;
+    vector<int> resample_idx ;
 
-    ParticleSLAM<GaussianType>(unsigned int n = 100)
+    ParticleSLAM(unsigned int n = 100)
     :
-      nParticles(n),
+      n_particles(n),
       weights(n),
       states(n),
-      maps(n),
+      maps_static(n),
+      maps_dynamic(n),
+      resample_idx(n),
       cardinalities(n),
       cardinality_birth()
     {
     }
-    ParticleSLAM<GaussianType>(const ParticleSLAM<GaussianType> &ps)
+    ParticleSLAM(const ParticleSLAM &ps)
     {
-        nParticles = ps.nParticles ;
+        n_particles = ps.n_particles ;
         states = ps.states ;
-        maps = ps.maps ;
+        maps_static = ps.maps_static ;
+        maps_dynamic = ps.maps_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
+        resample_idx = ps.resample_idx ;
     }
-    ParticleSLAM<GaussianType> operator=(const ParticleSLAM<GaussianType> ps)
+    ParticleSLAM operator=(const ParticleSLAM ps)
     {
-        nParticles = ps.nParticles ;
+        n_particles = ps.n_particles ;
         states = ps.states ;
-        maps = ps.maps ;
+        maps_static = ps.maps_static ;
+        maps_dynamic = ps.maps_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
+        resample_idx = ps.resample_idx ;
         return *this ;
     }
 };

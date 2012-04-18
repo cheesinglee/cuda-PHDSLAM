@@ -8,9 +8,9 @@
 #include <sstream>
 #include <iterator>
 
-//// matlab output
-//#include <mex.h>
-//#include <mat.h>
+// matlab output
+#include <mex.h>
+#include <mat.h>
 
 //// pickling tools
 //#include <chooseser.h>
@@ -42,41 +42,6 @@
 #endif
 
 using namespace std ;
-
-////--- Externally defined CUDA kernel callers
-//extern "C"
-//void
-//initCphdConstants() ;
-
-//template<class GaussianType>
-//extern void
-//phdPredict(ParticleSLAM<GaussianType>& particles, ... ) ;
-
-//template<class GaussianType>
-//extern void
-//phdPredictVp( ParticleSLAM<GaussianType>& particles ) ;
-
-//template<class GaussianType>
-//extern void
-//addBirths( ParticleSLAM<GaussianType>& particles, measurementSet ZPrev ) ;
-
-//template<class GaussianType>
-//extern ParticleSLAM<GaussianType>
-//phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements) ;
-
-//template<class GaussianType>
-//extern ParticleSLAM<GaussianType>
-//resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles=-1 ) ;
-
-//template<class GaussianType>
-//extern void
-//recoverSlamState(ParticleSLAM<GaussianType> particles, ConstantVelocityState& expectedPose,
-//        vector<GaussianType>& expectedMap, vector<REAL>& cn_estimate ) ;
-
-//extern "C"
-//void
-//setDeviceConfig( const SlamConfig& config ) ;
-////--- End external functions
 
 // SLAM configuration
 SlamConfig config ;
@@ -192,94 +157,116 @@ void printMeasurement(RangeBearingMeasurement z)
     cout << z.range <<"\t\t" << z.bearing << endl ;
 }
 
-//void
-//writeParticlesMat(ParticleSLAM<Gaussian4D> particles, int t = -1, const char* filename="particles")
-//{
-//        // create the filename
-//        std::string particlesFilename(filename) ;
-//        if ( t >= 0 )
-//        {
-//                char timeStep[8] ;
-//                sprintf(timeStep,"%d",t) ;
-//                particlesFilename += timeStep ;
-//        }
-//        particlesFilename += ".mat" ;
+template <class GaussianType>
+void write_map_mat( vector<vector<GaussianType> > maps, mxArray*& ptr_maps)
+{
+    mwSize n_particles = maps.size() ;
+    mxArray* ptr_weights = NULL ;
+    mxArray* ptr_means = NULL ;
+    mxArray* ptr_covs = NULL ;
+    for ( unsigned int p = 0 ; p < n_particles ; p++ )
+    {
+        vector<GaussianType> map = maps[p] ;
+        mwSize dims = sizeof(map[0].mean)/sizeof(REAL) ;
+        mwSize map_size = map.size() ;
+        mwSize cov_dims[3] = {dims,dims,map_size} ;
+        ptr_weights = mxCreateNumericMatrix(1,map_size,mxDOUBLE_CLASS,mxREAL) ;
+        ptr_means = mxCreateNumericMatrix(dims,map_size,mxDOUBLE_CLASS,mxREAL) ;
+        ptr_covs = mxCreateNumericArray(3,cov_dims,mxDOUBLE_CLASS,mxREAL) ;
+        if ( map_size > 0 )
+        {
+            for ( unsigned int j = 0 ; j < map_size ; j++ )
+            {
+                mxGetPr( ptr_weights )[j] = map[j].weight ;
+                for ( unsigned int k = 0 ; k < dims ; k++ )
+                {
+                    mxGetPr( ptr_means )[dims*j+k] = map[j].mean[k] ;
+                }
+                for ( unsigned int k = 0 ; k < dims*dims ; k++ )
+                {
+                    mxGetPr( ptr_covs )[dims*dims*j+k] = map[j].cov[k] ;
+                }
+            }
+        }
+        mxSetFieldByNumber( ptr_maps, p, 0, ptr_weights ) ;
+        mxSetFieldByNumber( ptr_maps, p, 1, ptr_means ) ;
+        mxSetFieldByNumber( ptr_maps, p, 2, ptr_covs ) ;
+    }
+}
 
-//        // load particles into mxArray object
-//        mwSize nParticles = particles.nParticles ;
+void
+writeParticlesMat(ParticleSLAM particles, int t = -1,
+                  const char* filename="particles")
+{
+        // create the filename
+        std::ostringstream oss ;
+        oss << filename ;
+        oss << setfill('0') << setw(5) ;
+        oss << t << ".mat" ;
+        std::string matfilename = oss.str() ;
 
-//        mxArray* states = mxCreateNumericMatrix(6,nParticles,mxDOUBLE_CLASS,mxREAL) ;
-//        double* statesArray = (double*)mxCalloc(nParticles*6,sizeof(double));
-//        int i = 0 ;
-//        for ( unsigned int p = 0 ; p < nParticles ; p++ )
-//        {
-//                statesArray[i+0] = particles.states[p].px ;
-//                statesArray[i+1] = particles.states[p].py ;
-//                statesArray[i+2] = particles.states[p].ptheta ;
-//                statesArray[i+3] = particles.states[p].vx ;
-//                statesArray[i+4] = particles.states[p].vy ;
-//                statesArray[i+5] = particles.states[p].vtheta ;
-//                i+=6 ;
-//        }
-//        mxFree(mxGetPr(states)) ;
-//        mxSetPr(states,statesArray) ;
+        // load particle states, weights, and resample indices into mxArrays
+//        DEBUG_MSG("states,weights,resample_idx") ;
+        mwSize nParticles = particles.n_particles ;
+        mxArray* states = mxCreateNumericMatrix(6,nParticles,
+                                                mxDOUBLE_CLASS,mxREAL) ;
+        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
+                                                 mxDOUBLE_CLASS,mxREAL) ;
+        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
+                                                      mxINT32_CLASS,mxREAL ) ;
+        int i = 0 ;
+        int* ptr_resample = (int*)mxGetData(resample_idx) ;
+        for ( unsigned int p = 0 ; p < nParticles ; p++ )
+        {
+            mxGetPr(states)[i+0] = particles.states[p].px ;
+            mxGetPr(states)[i+1] = particles.states[p].py ;
+            mxGetPr(states)[i+2] = particles.states[p].ptheta ;
+            mxGetPr(states)[i+3] = particles.states[p].vx ;
+            mxGetPr(states)[i+4] = particles.states[p].vy ;
+            mxGetPr(states)[i+5] = particles.states[p].vtheta ;
+            mxGetPr(weights)[p] = particles.weights[p] ;
+            ptr_resample[p] = particles.resample_idx[p] ;
+            i+=6 ;
+        }
 
-//        mxArray* weights = mxCreateNumericMatrix(nParticles,1,mxDOUBLE_CLASS,mxREAL) ;
-//        double* weightsArray = (double*)mxCalloc(nParticles,sizeof(double)) ;
-//        std::copy( particles.weights.begin(), particles.weights.end(), weightsArray ) ;
-////        memcpy(weightsArray,particles.weights,nParticles*sizeof(double)) ;
-//        mxFree(mxGetPr(weights)) ;
-//        mxSetPr(weights,weightsArray) ;
+        // copy maps to mxarray
+//        DEBUG_MSG("copy maps") ;
+        const char* mapFieldNames[] = {"weights","means","covs"} ;
+        mxArray* maps_static = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
+        mxArray* maps_dynamic = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
+        write_map_mat( particles.maps_static, maps_static ) ;
+        write_map_mat( particles.maps_dynamic, maps_dynamic ) ;
 
-//        const char* mapFieldNames[] = {"weights","means","covs"} ;
-//        mxArray* maps = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
-//        mwSize covDims[3] = {2,2,2} ;
-//        mxArray* mapWeights ;
-//        mxArray* mapMeans ;
-//        mxArray* mapCovs ;
-//        for ( unsigned int p = 0 ; p < nParticles ; p++ )
-//        {
-//                gaussianMixture map = particles.maps[p] ;
-//                mwSize mapSize = map.size() ;
-//                covDims[2] = mapSize ;
-//                mapWeights = mxCreateNumericMatrix(1,mapSize,mxDOUBLE_CLASS,mxREAL) ;
-//                mapMeans = mxCreateNumericMatrix(2,mapSize,mxDOUBLE_CLASS,mxREAL) ;
-//                mapCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
-//                if ( mapSize > 0 )
-//                {
-//                        for ( unsigned int j = 0 ; j < mapSize ; j++ )
-//                        {
-//                                mxGetPr( mapWeights )[j] = map[j].weight ;
-//                                mxGetPr( mapMeans )[2*j+0] = map[j].mean[0] ;
-//                                mxGetPr( mapMeans )[2*j+1] = map[j].mean[1] ;
-//                                mxGetPr( mapCovs )[4*j+0] = map[j].cov[0] ;
-//                                mxGetPr( mapCovs )[4*j+1] = map[j].cov[1] ;
-//                                mxGetPr( mapCovs )[4*j+2] = map[j].cov[2] ;
-//                                mxGetPr( mapCovs )[4*j+3] = map[j].cov[3] ;
-//                        }
-//                }
-//                mxSetFieldByNumber( maps, p, 0, mapWeights ) ;
-//                mxSetFieldByNumber( maps, p, 1, mapMeans ) ;
-//                mxSetFieldByNumber( maps, p, 2, mapCovs ) ;
-//        }
+        // assemble final mat-file structure
+//        DEBUG_MSG("assemble mat-file") ;
+        const char* particleFieldNames[] = {"states","weights","maps_static",
+                                            "maps_dynamic","resample_idx"} ;
+//        DEBUG_MSG("mxCreateStructMatrix") ;
+        mxArray* mxParticles = mxCreateStructMatrix(1,1,5,particleFieldNames) ;
+//        DEBUG_MSG("states") ;
+        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
+//        DEBUG_MSG("weights") ;
+        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
+//        DEBUG_MSG("maps_static") ;
+        mxSetFieldByNumber( mxParticles, 0, 2, maps_static ) ;
+//        DEBUG_MSG("maps_dynamic") ;
+        mxSetFieldByNumber( mxParticles, 0, 3, maps_dynamic ) ;
+//        DEBUG_MSG("resample_idx") ;
+        mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
 
-//        const char* particleFieldNames[] = {"states","weights","maps"} ;
-//        mxArray* mxParticles = mxCreateStructMatrix(1,1,3,particleFieldNames) ;
-//        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
-//        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
-//        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
+        // write to mat file
+        DEBUG_MSG("Write to mat-file") ;
+        MATFile* matfile = matOpen( matfilename.c_str(), "w" ) ;
+        matPutVariable( matfile, "particles", mxParticles ) ;
+        matClose(matfile) ;
 
-//        // write to mat file
-//        MATFile* matfile = matOpen( particlesFilename.c_str(), "w" ) ;
-//        matPutVariable( matfile, "particles", mxParticles ) ;
-//        matClose(matfile) ;
-
-//        // clean up
-//        mxDestroyArray( mxParticles ) ;
-//}
+        // clean up
+        DEBUG_MSG("mxDestroyArray") ;
+        mxDestroyArray( mxParticles ) ;
+}
 
 //void writeLogMat(ParticleSLAM<Gaussian4D> particles, ConstantVelocityState expectedPose,
-//				gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
+//                                gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
 //{
 ////        writeParticlesMat(particles,t) ;
 
@@ -294,15 +281,15 @@ void printMeasurement(RangeBearingMeasurement z)
 
 //        // create the filename
 //        std::ostringstream oss ;
-//		oss << "state_estimate" << t << ".mat" ;
+//                oss << "state_estimate" << t << ".mat" ;
 //        std::string expectationFilename = oss.str() ;
 
-//		const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
-//		mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
+//                const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
+//                mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
 
 //        // pack data into mxArrays
 
-//		// estimated pose
+//                // estimated pose
 //        mxArray* mxPose = mxCreateNumericMatrix(6,1,mxDOUBLE_CLASS,mxREAL) ;
 //        mxGetPr( mxPose )[0] = expectedPose.px ;
 //        mxGetPr( mxPose )[1] = expectedPose.py ;
@@ -311,7 +298,7 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxGetPr( mxPose )[4] = expectedPose.vy ;
 //        mxGetPr( mxPose )[5] = expectedPose.vtheta ;
 
-//		// estimated map
+//                // estimated map
 //        const char* mapFieldNames[] = {"weights","means","covs"} ;
 //        mxArray* mxMap = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
 //        int nFeatures = expectedMap.size() ;
@@ -337,39 +324,39 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
 //        mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
 
-//		// estimated cardinality
-//		mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
-//		for ( int n = 0 ; n <= config.maxCardinality ; n++ )
-//		{
-//			mxGetPr( mx_cn )[n] = cn_estimate[n] ;
-//		}
+//                // estimated cardinality
+//                mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
+//                for ( int n = 0 ; n <= config.maxCardinality ; n++ )
+//                {
+//                        mxGetPr( mx_cn )[n] = cn_estimate[n] ;
+//                }
 
-//		// particle poses and weights
-//		int n_particles = particles.nParticles ;
-//		const char* particle_field_names[] = {"weights","poses"} ;
-//		mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
-//		mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-//		mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-//		for ( int i = 0 ; i < n_particles ; i++ )
-//		{
-//			mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
-//			mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
-//			mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
-//			mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
-//			mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
-//			mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
-//			mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
-//		}
-//		mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
-//		mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
+//                // particle poses and weights
+//                int n_particles = particles.nParticles ;
+//                const char* particle_field_names[] = {"weights","poses"} ;
+//                mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
+//                mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+//                mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
+//                for ( int i = 0 ; i < n_particles ; i++ )
+//                {
+//                        mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
+//                        mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
+//                        mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
+//                        mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
+//                        mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
+//                        mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
+//                        mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
+//                }
+//                mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
+//                mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
 ////	// resize the array to accommodate the new entry
 ////	mxSetM( mxStates, t+1 ) ;
 
 //        // save the new entry
 //        mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
 //        mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
-//		mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
-//		mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
+//                mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
+//                mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
 
 //        // write to the mat-file
 //        MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
@@ -380,86 +367,111 @@ void printMeasurement(RangeBearingMeasurement z)
 //        mxDestroyArray( mxStates ) ;
 //}
 
-void writeParticles(ParticleSLAM<Gaussian4D> particles, std::string filename, int t = -1)
-{
-        std::ostringstream oss ;
-        oss << filename ;
-        oss << setfill('0') << setw(5) ;
-        oss << t << ".log" ;
-        std::string particlesFilename = oss.str() ;
-//        if ( t >= 0 )
+//void writeParticles(ParticleSLAM particles, std::string filename, int t = -1)
+//{
+//        std::ostringstream oss ;
+//        oss << filename ;
+//        oss << setfill('0') << setw(5) ;
+//        oss << t << ".log" ;
+//        std::string particlesFilename = oss.str() ;
+////        if ( t >= 0 )
+////        {
+////                char timeStep[8] ;
+////                sprintf(timeStep,"%d",t) ;
+////                particlesFilename += timeStep ;
+////        }
+////        particlesFilename += ".log" ;
+//        fstream particlesFile(particlesFilename.c_str(), fstream::out|fstream::app ) ;
+//        if (!particlesFile)
 //        {
-//                char timeStep[8] ;
-//                sprintf(timeStep,"%d",t) ;
-//                particlesFilename += timeStep ;
+//                cout << "failed to open log file" << endl ;
+//                return ;
 //        }
-//        particlesFilename += ".log" ;
-        fstream particlesFile(particlesFilename.c_str(), fstream::out|fstream::app ) ;
-        if (!particlesFile)
-        {
-                cout << "failed to open log file" << endl ;
-                return ;
-        }
-        for ( int n = 0 ; n < particles.nParticles ; n++ )
-        {
-                particlesFile << particles.weights[n] << " "
-                                << particles.states[n].px << " "
-                                << particles.states[n].py << " "
-                                << particles.states[n].ptheta << " "
-                                << particles.states[n].vx << " "
-                                << particles.states[n].vy << " "
-                                << particles.states[n].vtheta << " " ;
-                for ( int i = 0 ; i < (int)particles.maps[n].size() ; i++ )
-                {
-                        particlesFile << particles.maps[n][i].weight << " "
-                                        << particles.maps[n][i].mean[0] << " "
-                                        << particles.maps[n][i].mean[1] << " "
-                                        << particles.maps[n][i].cov[0] << " "
-                                        << particles.maps[n][i].cov[1] << " "
-                                        << particles.maps[n][i].cov[2] << " "
-                                        << particles.maps[n][i].cov[3] << " " ;
-                }
-                particlesFile << endl ;
-        }
-        particlesFile.close() ;
-}
+//        for ( int n = 0 ; n < particles.nParticles ; n++ )
+//        {
+//                particlesFile << particles.weights[n] << " "
+//                                << particles.states[n].px << " "
+//                                << particles.states[n].py << " "
+//                                << particles.states[n].ptheta << " "
+//                                << particles.states[n].vx << " "
+//                                << particles.states[n].vy << " "
+//                                << particles.states[n].vtheta << " " ;
+//                for ( int i = 0 ; i < (int)particles.maps[n].size() ; i++ )
+//                {
+//                        particlesFile << particles.maps[n][i].weight << " "
+//                                        << particles.maps[n][i].mean[0] << " "
+//                                        << particles.maps[n][i].mean[1] << " "
+//                                        << particles.maps[n][i].cov[0] << " "
+//                                        << particles.maps[n][i].cov[1] << " "
+//                                        << particles.maps[n][i].cov[2] << " "
+//                                        << particles.maps[n][i].cov[3] << " " ;
+//                }
+//                particlesFile << endl ;
+//        }
+//        particlesFile.close() ;
+//}
 
-ParticleSLAM<Gaussian4D> loadParticles(std::string filename)
+//ParticleSLAM loadParticles(std::string filename)
+//{
+//    ifstream file( filename.c_str() ) ;
+//    int n_particles = std::count(std::istreambuf_iterator<char>(file),
+//                                std::istreambuf_iterator<char>(), '\n');
+//    ParticleSLA particles(n_particles) ;
+//    cout << "reading " << n_particles << " particles from " << filename << endl ;
+//    file.seekg(ifstream::beg) ;
+//    for ( int n = 0 ; n < n_particles ; n++ )
+//    {
+//        std::string line ;
+//        getline(file,line) ;
+////        cout << line << endl ;
+//        istringstream iss(line) ;
+//        iss >> particles.weights[n] >> particles.states[n].px
+//            >> particles.states[n].py >> particles.states[n].ptheta
+//            >> particles.states[n].vx >> particles.states[n].vy
+//            >> particles.states[n].vtheta ;
+//        while ( !iss.eof() )
+//        {
+//            Gaussian4D feature ;
+//            iss >> feature.weight >> feature.mean[0] >> feature.mean[1]
+//                >> feature.cov[0] >> feature.cov[1] >> feature.cov[2]
+//                >> feature.cov[3] ;
+//            particles.maps[n].push_back(feature) ;
+//        }
+//        particles.maps[n].pop_back() ;
+////        cout << "read " << particles.maps[n].size() << " features" << endl ;
+//    }
+
+//    return particles ;
+//}
+
+/// write a vector of features as a single line to an output stream,
+/// with a terminating newline
+template <class GaussianType>
+void write_map(ostream out, vector<GaussianType> map)
 {
-    ifstream file( filename.c_str() ) ;
-    int n_particles = std::count(std::istreambuf_iterator<char>(file),
-                                std::istreambuf_iterator<char>(), '\n');
-    ParticleSLAM<Gaussian4D> particles(n_particles) ;
-    cout << "reading " << n_particles << " particles from " << filename << endl ;
-    file.seekg(ifstream::beg) ;
-    for ( int n = 0 ; n < n_particles ; n++ )
+    int n_features = map.size() ;
+    if ( n_features > 0 )
     {
-        std::string line ;
-        getline(file,line) ;
-//        cout << line << endl ;
-        istringstream iss(line) ;
-        iss >> particles.weights[n] >> particles.states[n].px
-            >> particles.states[n].py >> particles.states[n].ptheta
-            >> particles.states[n].vx >> particles.states[n].vy
-            >> particles.states[n].vtheta ;
-        while ( !iss.eof() )
+        int dims = sizeof(map[0].mean)/sizeof(REAL) ;
+        for ( int n = 0 ; n < (int)map.size() ; n++ )
         {
-            Gaussian4D feature ;
-            iss >> feature.weight >> feature.mean[0] >> feature.mean[1]
-                >> feature.cov[0] >> feature.cov[1] >> feature.cov[2]
-                >> feature.cov[3] ;
-            particles.maps[n].push_back(feature) ;
+            out << map[n].weight << " " ;
+            for (int i = 0 ; i < dims ; i++ )
+            {
+                out << map[n].mean[i] << " " ;
+            }
+            for (int i = 0 ; i < dims*dims ; i++ )
+            {
+                out << map[n].cov[i] << " " ;
+            }
         }
-        particles.maps[n].pop_back() ;
-//        cout << "read " << particles.maps[n].size() << " features" << endl ;
     }
-
-    return particles ;
+    out << endl ;
 }
 
-template<class GaussianType>
-void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState expectedPose,
-                                vector<GaussianType> expectedMap, vector<int> idx_resample,
+void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
+            vector<Gaussian2D> expected_map_static, vector<Gaussian4D> expected_map_dynamic,
+            vector<int> idx_resample,
                                 vector<REAL> cn_estimate, int t)
 {
         // create the filename
@@ -468,29 +480,44 @@ void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState
         oss << setfill('0') << setw(5) ;
         oss << t << ".log" ;
         std::string filename = oss.str() ;
+
         fstream stateFile(filename.c_str(), fstream::out|fstream::app ) ;
         stateFile << expectedPose.px << " " << expectedPose.py << " "
                     << expectedPose.ptheta << " " << expectedPose.vx << " "
                     << expectedPose.vy << " " << expectedPose.vtheta << " "
                     << endl ;
-        if (expectedMap.size() > 0)
+
+        // write the static map
+        if (expected_map_static.size() > 0)
         {
-            // get dimensionality of map
-            int len_cov = sizeof(expectedMap[0].cov)/sizeof(REAL) ;
-            int len_mean = sqrt(len_cov) ;
-            DEBUG_VAL(len_cov) ;
-            DEBUG_VAL(len_mean) ;
-            DEBUG_VAL(expectedMap.size()) ;
-            for ( int n = 0 ; n < (int)expectedMap.size() ; n++ )
+            for ( int n = 0 ; n < (int)expected_map_static.size() ; n++ )
             {
-                stateFile << expectedMap[n].weight << " " ;
-                for (int i = 0 ; i < len_mean ; i++ )
+                stateFile << expected_map_static[n].weight << " " ;
+                for (int i = 0 ; i < 2 ; i++ )
                 {
-                    stateFile << expectedMap[n].mean[i] << " " ;
+                    stateFile << expected_map_static[n].mean[i] << " " ;
                 }
-                for (int i = 0 ; i < len_cov ; i++ )
+                for (int i = 0 ; i < 4 ; i++ )
                 {
-                    stateFile << expectedMap[n].cov[i] << " " ;
+                    stateFile << expected_map_static[n].cov[i] << " " ;
+                }
+            }
+        }
+        stateFile << endl ;
+
+        // write the dynamic map
+        if (expected_map_dynamic.size() > 0)
+        {
+            for ( int n = 0 ; n < (int)expected_map_dynamic.size() ; n++ )
+            {
+                stateFile << expected_map_dynamic[n].weight << " " ;
+                for (int i = 0 ; i < 4; i++ )
+                {
+                    stateFile << expected_map_dynamic[n].mean[i] << " " ;
+                }
+                for (int i = 0 ; i < 16 ; i++ )
+                {
+                    stateFile << expected_map_dynamic[n].cov[i] << " " ;
                 }
             }
         }
@@ -509,7 +536,7 @@ void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState
         // particle weights
         for ( int i = 0 ; i < times; i++ )
         {
-            for ( int n = 0 ; n < particles.nParticles ; n++ )
+            for ( int n = 0 ; n < particles.n_particles ; n++ )
             {
                 stateFile << particles.weights[n] << " " ;
             }
@@ -519,7 +546,7 @@ void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState
         // particle poses
         for ( int i = 0 ; i < times ; i++ )
         {
-            for ( int n = 0 ; n < particles.nParticles ; n++ )
+            for ( int n = 0 ; n < particles.n_particles ; n++ )
             {
                 stateFile << particles.states[n].px << " "
                           << particles.states[n].py << " "
@@ -532,7 +559,7 @@ void writeLog(const ParticleSLAM<GaussianType>& particles, ConstantVelocityState
         stateFile << endl ;
 
         // resample indices
-        for ( int n = 0 ; n < particles.nParticles ; n++ )
+        for ( int n = 0 ; n < particles.n_particles ; n++ )
         {
             stateFile << idx_resample[n] << " " ;
         }
@@ -629,7 +656,8 @@ void loadConfig(const char* filename)
             ("std_range", value<REAL>(&config.stdRange)->default_value(1.0), "Standard deviation of sensor range noise")
             ("clutter_rate", value<REAL>(&config.clutterRate)->default_value(15), "Poisson mean number of clutter measurements per scan")
             ("pd", value<REAL>(&config.pd)->default_value(0.98), "Nominal probability of detection for in-range features")
-            ("n_particles", value<int>(&config.nParticles)->default_value(512), "Number of vehicle pose particles")
+            ("ps", value<REAL>(&config.ps)->default_value(0.8), "Nominal probability of survival for dynamic features")
+            ("n_particles", value<int>(&config.n_particles)->default_value(512), "Number of vehicle pose particles")
 			("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
             ("resample_threshold", value<REAL>(&config.resampleThresh)->default_value(0.15), "Threshold on normalized nEff for particle resampling")
             ("subdivide_predict", value<int>(&config.subdividePredict)->default_value(1), "Perform the prediction over several shorter time intervals before the update")
@@ -664,6 +692,8 @@ void loadConfig(const char* filename)
             ("std_ay_features", value<REAL>(&config.stdAyMap)->default_value(0), "Std. deviation of y process noise in constant velocity model for targets")
             ("cov_vx_birth", value<REAL>(&config.covVxBirth)->default_value(0), "Birth covariance of x velocity in dynamic targets")
             ("cov_vy_birth", value<REAL>(&config.covVyBirth)->default_value(0), "Birth covariance of y velocity in dynamic targets")
+            ("tau", value<REAL>(&config.tau)->default_value(0), "Velocity threshold for jump markov transition probability")
+            ("beta", value<REAL>(&config.beta)->default_value(1), "Steepness of sigmoid function for computing JMM transition probability")
             ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
             ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
             ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
@@ -705,9 +735,30 @@ void loadConfig(const char* filename)
 
 }
 
-template<class GaussianType>
-void do_simulation()
+int main(int argc, char *argv[])
 {
+    // check cuda device properties
+    int nDevices ;
+    CUDA_SAFE_CALL(cudaGetDeviceCount( &nDevices )) ;
+    cout << "Found " << nDevices << " CUDA Devices" << endl ;
+    cudaDeviceProp props ;
+    CUDA_SAFE_CALL(cudaGetDeviceProperties( &props, 0 )) ;
+    cout << "Device name: " << props.name << endl ;
+    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
+    deviceMemLimit = props.totalGlobalMem*0.95 ;
+    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
+
+    // load the configuration file
+    if ( argc < 2 )
+    {
+        cout << "missing configuration file argument" << endl ;
+        exit(1) ;
+    }
+    DEBUG_MSG("Loading configuration file") ;
+    config_filename = argv[1] ;
+    loadConfig( config_filename.data() ) ;
+    setDeviceConfig( config ) ;
+
     // time variables
     time_t rawtime ;
     struct tm *timeinfo ;
@@ -751,9 +802,9 @@ void do_simulation()
     if (nSteps > config.maxSteps && config.maxSteps > 0)
         nSteps = config.maxSteps ;
 
-    // initialize particless
-    ParticleSLAM<GaussianType> particles(config.nParticles) ;
-    for (int n = 0 ; n < config.nParticles ; n++ )
+    // initialize particles
+    ParticleSLAM particles(config.n_particles) ;
+    for (int n = 0 ; n < config.n_particles ; n++ )
     {
         particles.states[n].px = config.x0 ;
         particles.states[n].py = config.y0 ;
@@ -761,15 +812,12 @@ void do_simulation()
         particles.states[n].vx = config.vx0 ;
         particles.states[n].vy = config.vy0 ;
         particles.states[n].vtheta = config.vtheta0 ;
-        particles.weights[n] = -log(config.nParticles) ;
+        particles.weights[n] = -log(config.n_particles) ;
         if ( config.filterType == CPHD_TYPE )
         {
             particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
         }
     }
-
-    // vector to keep track of resamplings
-    vector<int> idx_resample(config.nParticles) ;
 
     if ( config.filterType == CPHD_TYPE )
     {
@@ -794,9 +842,10 @@ void do_simulation()
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
-    ParticleSLAM<GaussianType> particlesPreMerge(particles) ;
+    ParticleSLAM particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
-    vector<GaussianType> expectedMap ;
+    vector<Gaussian2D> expected_map_static ;
+    vector<Gaussian4D> expected_map_dynamic ;
     vector<REAL> cn_estimate ;
     REAL nEff ;
     timeval start, stop ;
@@ -817,17 +866,6 @@ void do_simulation()
         DEBUG_MSG("Initializing CPHD constants") ;
         initCphdConstants() ;
     }
-
-    // check cuda device properties
-    int nDevices ;
-    cudaGetDeviceCount( &nDevices ) ;
-    cout << "Found " << nDevices << " CUDA Devices" << endl ;
-    cudaDeviceProp props ;
-    cudaGetDeviceProperties( &props, 0 ) ;
-    cout << "Device name: " << props.name << endl ;
-    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
-    deviceMemLimit = props.totalGlobalMem*0.95 ;
-    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
 
     for (int n = 0 ; n < nSteps ; n++ )
     {
@@ -881,13 +919,6 @@ void do_simulation()
             do_predict = true ;
         }
 
-//                // need measurements from previous time step for births
-//                if (ZPrev.size() > 0 )//&& (n % 4 == 0) )
-//                {
-//                    cout << "Adding birth terms" << endl ;
-//                    addBirths(particles,ZPrev) ;
-//                }
-
         // no motion for time step 1
         if ( n > 0 && do_predict )
         {
@@ -908,29 +939,32 @@ void do_simulation()
             particlesPreMerge = phdUpdate(particles, ZZ) ;
         }
         cout << "Extracting SLAM state" << endl ;
-        recoverSlamState(particles, expectedPose, expectedMap, cn_estimate ) ;
+        recoverSlamState(particles, expectedPose, expected_map_static,
+                         expected_map_dynamic, cn_estimate ) ;
 
 #ifdef DEBUG
         DEBUG_MSG( "Writing Log" ) ;
-        writeLog(particles, expectedPose, expectedMap, idx_resample, cn_estimate, n) ;
+        writeParticlesMat(particles,n) ;
+//        writeLog(particles, expectedPose, expected_map_static,
+//                 expected_map_dynamic,idx_resample, cn_estimate, n) ;
 //                writeParticles(particles,"particles",n) ;
 #endif
 
         nEff = 0 ;
-        for ( int i = 0; i < particles.nParticles ; i++)
+        for ( int i = 0; i < particles.n_particles ; i++)
             nEff += exp(2*particles.weights[i]) ;
-        nEff = 1.0/nEff/particles.nParticles ;
+        nEff = 1.0/nEff/particles.n_particles ;
         DEBUG_VAL(nEff) ;
         if (nEff <= config.resampleThresh && ZZ.size() > 0 )
         {
             DEBUG_MSG("Resampling particles") ;
-            particles = resampleParticles(particles,config.nParticles,idx_resample) ;
+            particles = resampleParticles(particles,config.n_particles) ;
         }
         else
         {
-            for ( int i = 0 ; i < particles.nParticles ; i++ )
+            for ( int i = 0 ; i < particles.n_particles ; i++ )
             {
-                idx_resample[i] = i ;
+                particles.resample_idx[i] = i ;
             }
         }
         ZPrev = ZZ ;
@@ -956,24 +990,6 @@ void do_simulation()
     system( command.c_str() ) ;
 #endif
     cout << "DONE!" << endl ;
-}
 
-int main(int argc, char *argv[])
-{
-    // load the configuration file
-    if ( argc < 2 )
-    {
-        cout << "missing configuration file argument" << endl ;
-        exit(1) ;
-    }
-    DEBUG_MSG("Loading configuration file") ;
-    config_filename = argv[1] ;
-    loadConfig( config_filename.data() ) ;
-    setDeviceConfig( config ) ;
-
-    if (config.dynamicFeatures)
-        do_simulation<Gaussian4D>() ;
-    else
-        do_simulation<Gaussian2D>() ;
     return 0 ;
 }

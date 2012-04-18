@@ -177,41 +177,40 @@ makePositiveDefinite( REAL A[4] )
 }
 
 /// compute the Mahalanobis distance between two Gaussians
-template<class GaussianType>
 __device__ REAL
-computeMahalDist(GaussianType a, GaussianType b)
+computeMahalDist(Gaussian2D a, Gaussian2D b)
 {
-    int dim = getGaussianDim(a) ;
     REAL dist = 0 ;
-    if (dim == 2)
-    {
-        REAL sigma_inv[4] ;
-        REAL sigma[4] ;
-        for (int i = 0 ; i <4 ; i++)
-            sigma[i] = (a.cov[i] + b.cov[i])/2 ;
-        invert_matrix2(sigma,sigma_inv);
-        REAL innov[2] ;
-        innov[0] = a.mean[0] - b.mean[0] ;
-        innov[1] = a.mean[1] - b.mean[1] ;
-        dist = innov[0]*innov[0]*sigma_inv[0] +
-                innov[0]*innov[1]*(sigma_inv[1]+sigma_inv[2]) +
-                innov[1]*innov[1]*sigma_inv[3] ;
-    }
-    else if(dim == 4)
-    {
-        REAL sigma_inv[16] ;
-        REAL sigma[16] ;
-        for (int i = 0 ; i < 16 ; i++)
-            sigma[i] = (a.cov[i] + b.cov[i])/2 ;
-        invert_matrix4(sigma,sigma_inv) ;
-        REAL innov[4] ;
-        for ( int i = 0 ; i < 4 ; i++ )
-            innov[i] = a.mean[i] - b.mean[i] ;
-        dist = innov[0]*(sigma_inv[0]*innov[0] + sigma_inv[4]*innov[1] + sigma_inv[8]*innov[2] + sigma_inv[12]*innov[3])
-                + innov[1]*(sigma_inv[1]*innov[0] + sigma_inv[5]*innov[1] + sigma_inv[9]*innov[2] + sigma_inv[13]*innov[3])
-                + innov[2]*(sigma_inv[2]*innov[0] + sigma_inv[6]*innov[1] + sigma_inv[10]*innov[2] + sigma_inv[14]*innov[3])
-                + innov[3]*(sigma_inv[3]*innov[0] + sigma_inv[7]*innov[1] + sigma_inv[11]*innov[2] + sigma_inv[15]*innov[3]) ;
-    }
+    REAL sigma_inv[4] ;
+    REAL sigma[4] ;
+    for (int i = 0 ; i <4 ; i++)
+        sigma[i] = (a.cov[i] + b.cov[i])/2 ;
+    invert_matrix2(sigma,sigma_inv);
+    REAL innov[2] ;
+    innov[0] = a.mean[0] - b.mean[0] ;
+    innov[1] = a.mean[1] - b.mean[1] ;
+    dist = innov[0]*innov[0]*sigma_inv[0] +
+            innov[0]*innov[1]*(sigma_inv[1]+sigma_inv[2]) +
+            innov[1]*innov[1]*sigma_inv[3] ;
+    return dist ;
+}
+
+__device__ REAL
+computeMahalDist(Gaussian4D a, Gaussian4D b)
+{
+    REAL dist = 0 ;
+    REAL sigma_inv[16] ;
+    REAL sigma[16] ;
+    for (int i = 0 ; i < 16 ; i++)
+        sigma[i] = (a.cov[i] + b.cov[i])/2 ;
+    invert_matrix4(sigma,sigma_inv) ;
+    REAL innov[4] ;
+    for ( int i = 0 ; i < 4 ; i++ )
+        innov[i] = a.mean[i] - b.mean[i] ;
+    dist = innov[0]*(sigma_inv[0]*innov[0] + sigma_inv[4]*innov[1] + sigma_inv[8]*innov[2] + sigma_inv[12]*innov[3])
+            + innov[1]*(sigma_inv[1]*innov[0] + sigma_inv[5]*innov[1] + sigma_inv[9]*innov[2] + sigma_inv[13]*innov[3])
+            + innov[2]*(sigma_inv[2]*innov[0] + sigma_inv[6]*innov[1] + sigma_inv[10]*innov[2] + sigma_inv[14]*innov[3])
+            + innov[3]*(sigma_inv[3]*innov[0] + sigma_inv[7]*innov[1] + sigma_inv[11]*innov[2] + sigma_inv[15]*innov[3]) ;
     return dist ;
 }
 
@@ -390,6 +389,17 @@ maxByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
         sdata[tid] = val = fmax(sdata[tid+1],val) ;
     }
     __syncthreads() ;
+}
+
+__device__ REAL
+logsumexpByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
+{
+    maxByReduction( sdata, val, tid ) ;
+    REAL maxval = sdata[0] ;
+    __syncthreads() ;
+
+    sumByReduction( sdata, exp(val-maxval), tid) ;
+    return safeLog(sdata[0]) + maxval ;
 }
 
 

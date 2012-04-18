@@ -7,26 +7,26 @@
 void
 initCphdConstants() ;
 
-template<class GaussianType>
 void
-phdPredict(ParticleSLAM<GaussianType>& particles, ... ) ;
+predictMap(ParticleSLAM& p) ;
 
-template<class GaussianType>
 void
-phdPredictVp( ParticleSLAM<GaussianType>& particles ) ;
-
-template<class GaussianType>
-ParticleSLAM<GaussianType>
-phdUpdate(ParticleSLAM<GaussianType>& particles, measurementSet measurements) ;
-
-template<class GaussianType>
-ParticleSLAM<GaussianType>
-resampleParticles( ParticleSLAM<GaussianType> oldParticles, int nParticles, vector<int>& idx_resample ) ;
+phdPredict(ParticleSLAM& particles, ... ) ;
 
 template<class GaussianType>
 void
-recoverSlamState(ParticleSLAM<GaussianType> particles, ConstantVelocityState& expectedPose,
-        vector<GaussianType>& expectedMap, vector<REAL>& cn_estimate ) ;
+phdPredictVp( ParticleSLAM& particles ) ;
+
+ParticleSLAM
+phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
+
+ParticleSLAM
+resampleParticles( ParticleSLAM oldParticles, int n_particles=-1 ) ;
+
+void
+recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
+        vector<Gaussian2D>& expectedMap, vector<Gaussian4D>& expectedMapDynamic,
+        vector<REAL>& cn_estimate ) ;
 
 void
 setDeviceConfig( const SlamConfig& config ) ;

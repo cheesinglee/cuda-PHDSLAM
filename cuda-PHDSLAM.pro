@@ -34,13 +34,13 @@ LIBS   -= -lQtGui -lQtCore
 
 
 #### MATLAB external interface ###############################################
-##MATLAB_PATH = /home/cheesinglee/matlab2010a/
-##MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
-#MATLAB_PATH = /opt/Matlab # kermit
-#QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
-#QMAKE_LIBDIR += $$MATLAB_PATH/bin/glnxa64/
-#LIBS += -lmx -lmat
-#INCLUDEPATH += $$MATLAB_PATH/extern/include
+#MATLAB_PATH = /home/cheesinglee/matlab2010a/
+#MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
+MATLAB_PATH = /opt/Matlab # kermit
+QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
+QMAKE_LIBDIR += $$MATLAB_PATH/bin/glnxa64/
+LIBS += -lmx -lmat
+INCLUDEPATH += $$MATLAB_PATH/extern/include
 ##############################################################################
 
 #### Boost libraries ###################################################

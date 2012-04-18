@@ -16,42 +16,63 @@ end
 t = 0 ;
 nSteps = 0 ;
 
+% read the backup of the config file to see if the features are dynamic or
+% static
+config_file = fileread([path,filesep,'config.cfg']) ;
+expr = 'dynamic_features\s*=\s*(?<dynamic>\d)' ;
+matches = regexp(config_file,expr,'names') ;
+is_dynamic = strcmp(matches.dynamic,'1') ;
+
 disp 'reading log files...'
-listing = dir([path,filesep,'state_estimate*']) ;
-nSteps = length(listing) ;
+listing = dir([path,filesep,'particles*']) ;
+listing2 = dir([path,filesep,'state_estimate*']) ;
+nSteps = length(listing) + length(listing2) ;
 nParticles = -1 ;
 expectedMeans = cell(nSteps,1) ;
 expectedCovs = cell(nSteps,1) ;
 expectedWeights = cell(nSteps,1) ;
+means_dynamic = cell(nSteps,1) ;
+covs_dynamic = cell(nSteps,1) ;
+weights_dynamic = cell(nSteps,1) ;
 expectedTraj = zeros(6,nSteps) ;
 estimatedCn = cell(nSteps,1) ;
 particleWeights = [] ;
 % nSteps = 400 ;
 for i = 1:nSteps
     disp([num2str(i),'/',num2str(nSteps)]) 
-    matfilename = [path,filesep,'state_estimate',num2str(i-1),'.mat'] ;
+    matfilename = [path,filesep,'particles',num2str(i-1,'%05d'),'.mat'] ;
     txtfilename = [path,filesep,'state_estimate',num2str(i-1,'%05d'),'.log'] ;
     if exist(matfilename,'file') 
     %     disp( particleFilename )
         load(matfilename) ;
+        
+        % allocate space for results on first run
         if nParticles < 0
-            nParticles = length(expectation.particles.weights) ;
+            nParticles = length(particles.weights) ;
             particleWeights = zeros(nSteps, nParticles) ;
-            particlePoses = zeros( nSteps, nParticles, 6 ) ;
-    %         particleMaps = cell(nSteps,nParticles) ;
+            particlePoses = zeros( 6, nParticles, nSteps ) ;
         end
-        particleWeights(i,:) = expectation.particles.weights ;
-        statesReshaped = reshape(expectation.particles.poses,[1,6,nParticles]) ;
-        particlePoses(i,:,:) = permute(statesReshaped, [1,3,2]) ;
-    %     for j = 1:length(particles.maps)
-    %         particleMaps{i,j} = particles.maps(j) ;
-    %     end
-        expectedTraj(:,i) = expectation.pose ;
-        expectedMeans{i} = expectation.map.means ;
-        expectedCovs{i} = expectation.map.covs ;
-        expectedWeights{i} = expectation.map.weights ;
-        estimatedCn{i} = exp(expectation.cardinality) ;
-        clear 'expectation'
+        
+        particle_weights = particles.weights ;
+        particle_poses = particles.states ;
+        
+        % get the heaviest particle
+        [w_max,idx_max] = max(particles.weights) ;
+        
+        weighted_poses = particle_poses .* repmat(exp(particle_weights)',6,1) ;
+        expectedTraj(:,i) = sum(weighted_poses,2) ;
+        
+        expectedWeights{i} = particles.maps_static(idx_max).weights ;
+        expectedMeans{i} = particles.maps_static(idx_max).means ;
+        expectedCovs{i} = particles.maps_static(idx_max).covs ;
+        
+        weights_dynamic{i} = particles.maps_dynamic(idx_max).weights ;
+        means_dynamic{i} = particles.maps_dynamic(idx_max).means ;
+        covs_dynamic{i} = particles.maps_dynamic(idx_max).covs ;
+        
+        particlePoses(:,:,i) = particle_poses ;
+        particleWeights(i,:) = particle_weights ;
+%         clear 'paricles'
     elseif exist(txtfilename,'file')
         fid=fopen(txtfilename) ;
         
@@ -74,28 +95,37 @@ for i = 1:nSteps
         map_means = [] ;
         map_covs = [] ;
         map_weights = [] ;
-        if length(map_line) > 0
+        if length(map_line) > 0 
             map_cell = textscan(map_line,'%f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f %f') ;
             map_weights = map_cell{1} ;
             n_features = numel(map_weights) ;
-            map_means = [ map_cell{2}' ; map_cell{3}' ; map_cell{4}' ; map_cell{5}'] ;
-            map_covs = zeros(4,4,n_features) ;
-            map_covs(1,1,:) = reshape(map_cell{6},[1,1,n_features]) ;
-            map_covs(2,1,:) = reshape(map_cell{7},[1,1,n_features]) ;
-            map_covs(3,1,:) = reshape(map_cell{8},[1,1,n_features]) ;
-            map_covs(4,1,:) = reshape(map_cell{9},[1,1,n_features]) ;
-            map_covs(1,2,:) = reshape(map_cell{10},[1,1,n_features]) ;
-            map_covs(2,2,:) = reshape(map_cell{11},[1,1,n_features]) ;
-            map_covs(3,2,:) = reshape(map_cell{12},[1,1,n_features]) ;
-            map_covs(4,2,:) = reshape(map_cell{13},[1,1,n_features]) ;
-            map_covs(1,3,:) = reshape(map_cell{14},[1,1,n_features]) ;
-            map_covs(2,3,:) = reshape(map_cell{15},[1,1,n_features]) ;
-            map_covs(3,3,:) = reshape(map_cell{16},[1,1,n_features]) ;
-            map_covs(4,3,:) = reshape(map_cell{17},[1,1,n_features]) ;
-            map_covs(1,4,:) = reshape(map_cell{18},[1,1,n_features]) ;
-            map_covs(2,4,:) = reshape(map_cell{19},[1,1,n_features]) ;
-            map_covs(3,4,:) = reshape(map_cell{20},[1,1,n_features]) ;
-            map_covs(4,4,:) = reshape(map_cell{21},[1,1,n_features]) ;
+            if is_dynamic
+                map_means = [ map_cell{2}' ; map_cell{3}' ; map_cell{4}' ; map_cell{5}'] ;
+                map_covs = zeros(4,4,n_features) ;
+                map_covs(1,1,:) = reshape(map_cell{6},[1,1,n_features]) ;
+                map_covs(2,1,:) = reshape(map_cell{7},[1,1,n_features]) ;
+                map_covs(3,1,:) = reshape(map_cell{8},[1,1,n_features]) ;
+                map_covs(4,1,:) = reshape(map_cell{9},[1,1,n_features]) ;
+                map_covs(1,2,:) = reshape(map_cell{10},[1,1,n_features]) ;
+                map_covs(2,2,:) = reshape(map_cell{11},[1,1,n_features]) ;
+                map_covs(3,2,:) = reshape(map_cell{12},[1,1,n_features]) ;
+                map_covs(4,2,:) = reshape(map_cell{13},[1,1,n_features]) ;
+                map_covs(1,3,:) = reshape(map_cell{14},[1,1,n_features]) ;
+                map_covs(2,3,:) = reshape(map_cell{15},[1,1,n_features]) ;
+                map_covs(3,3,:) = reshape(map_cell{16},[1,1,n_features]) ;
+                map_covs(4,3,:) = reshape(map_cell{17},[1,1,n_features]) ;
+                map_covs(1,4,:) = reshape(map_cell{18},[1,1,n_features]) ;
+                map_covs(2,4,:) = reshape(map_cell{19},[1,1,n_features]) ;
+                map_covs(3,4,:) = reshape(map_cell{20},[1,1,n_features]) ;
+                map_covs(4,4,:) = reshape(map_cell{21},[1,1,n_features]) ;
+            else
+                map_means = [ map_cell{2}' ; map_cell{3}' ] ;
+                map_covs = zeros(2,2,n_features) ;
+                map_covs(1,1,:) = reshape(map_cell{4},[1,1,n_features]) ;
+                map_covs(2,1,:) = reshape(map_cell{5},[1,1,n_features]) ;
+                map_covs(1,2,:) = reshape(map_cell{6},[1,1,n_features]) ;
+                map_covs(2,2,:) = reshape(map_cell{7},[1,1,n_features]) ;
+            end
         end
         particleWeights(i,:) = weights_cell{1} ;
         particlePoses(i,:,1) = particles_cell{1} ;
@@ -116,6 +146,7 @@ end
 %% plot
 close all
 
+
 min_weight = 0.25 ;
 figure(1)
 set(gcf,'Position',[100,100,800,600]) ;
@@ -133,7 +164,7 @@ frame_counter = 1 ;
 for i = 1:draw_rate:nSteps
     set(0,'CurrentFigure',1) ;
     weights = exp(particleWeights(i,:)) ;
-    poses = squeeze(particlePoses(i,:,:))' ;
+    poses = particlePoses(:,:,i) ;
     if size(poses,1) == 1
         poses = poses' ;
     end
@@ -143,9 +174,29 @@ for i = 1:draw_rate:nSteps
     nFeatures = size(mapMeans,2) ;
     weight_sum = sum(mapWeights) ;
     [sorted, idx] = sort(mapWeights,'descend') ;
+    cn_est = weight_sum ;
+    if weight_sum > numel(idx)
+        weight_sum = numel(idx) ;
+    end
     idx = idx(1:round(weight_sum)) ;
 %     idx = mapWeights > min_weight ;
     pp = make_cov_ellipses( mapMeans(1:2,idx)', mapCovs(1:2,1:2,idx), N ) ;
+%     ppGold = makeCovEllipses( expectedMapsGold(i).means,
+%     expectedMapsGold(i).covs,N ) ;
+
+    mapWeights = weights_dynamic{i} ;
+    mapMeans = means_dynamic{i} ;
+    mapCovs = covs_dynamic{i} ;
+    nFeatures = size(mapMeans,2) ;
+    weight_sum = sum(mapWeights) ;
+    cn_est = cn_est + weight_sum ;
+    [sorted, idx] = sort(mapWeights,'descend') ;
+    if weight_sum > numel(idx)
+        weight_sum = numel(idx) ;
+    end
+    idx = idx(1:round(weight_sum)) ;
+%     idx = mapWeights > min_weight ;
+    pp_dynamic = make_cov_ellipses( mapMeans(1:2,idx)', mapCovs(1:2,1:2,idx), N ) ;
 %     ppGold = makeCovEllipses( expectedMapsGold(i).means,
 %     expectedMapsGold(i).covs,N ) ;
 
@@ -153,7 +204,10 @@ for i = 1:draw_rate:nSteps
     subplot(2,4,[1,2,5,6])
     hold on
     if ( numel(pp) > 0 )
-        plot(pp(1,:),pp(2,:),'b')
+        plot(pp(1,:),pp(2,:),'b','linewidth',2)
+    end
+    if( numel(pp_dynamic) > 0 )
+        plot(pp_dynamic(1,:),pp_dynamic(2,:),'r','linewidth',2)
     end
     plot(expectedTraj(1,i),expectedTraj(2,i),'dr','Markersize',8) ;
     plot( expectedTraj(1,1:i), expectedTraj(2,1:i), 'r--' ) ;
@@ -232,17 +286,17 @@ for i = 1:draw_rate:nSteps
     cn = estimatedCn{i} ;
     plot(0:numel(cn)-1,exp(cn),'.') ;
     ylim([0,1]) ;
-    title(['Cardinality, weightsum = ',num2str(weight_sum)])
+    title(['Cardinality, weightsum = ',num2str(cn_est)])
     drawnow
     avi_frames(frame_counter) = getframe(gcf) ;
     frame_counter = frame_counter + 1 ;
 %     keyboard
 end
-% %%
-% disp('Creating AVI')
-% avi = avifile('scphd_mixed_targets.avi') ;
-% for i = 1:numel(avi_frames)
-%     disp([num2str(i),'/',num2str(numel(avi_frames))])
-%     avi = addframe( avi,avi_frames(i) ) ;
-% end
-% avi = close(avi) ;
+%%
+disp('Creating AVI')
+avi = avifile('scphd_mixed_targets_mixed_models.avi') ;
+for i = 1:numel(avi_frames)
+    disp([num2str(i),'/',num2str(numel(avi_frames))])
+    avi = addframe( avi,avi_frames(i) ) ;
+end
+avi = close(avi) ;
