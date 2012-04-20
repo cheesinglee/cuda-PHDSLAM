@@ -199,6 +199,9 @@ __device__ void
 computeBirth( ConstantVelocityState pose, RangeBearingMeasurement z,
               Gaussian2D& feature_birth)
 {
+    // set birth weight
+    feature_birth.weight = safeLog(dev_config.birthWeight) ;
+
     // invert measurement
     REAL theta = pose.ptheta + z.bearing ;
     REAL dx = z.range*cos(theta) ;
@@ -227,8 +230,6 @@ computeBirth( ConstantVelocityState pose, RangeBearingMeasurement z,
     feature_birth.cov[3] = pow(J[1],2)*var_range +
             pow(J[3],2)*var_bearing ;
 
-    // set birth weight
-    feature_birth.weight = safeLog(dev_config.birthWeight) ;
 }
 
 __device__ void
@@ -801,7 +802,7 @@ phdPredictKernel(ConstantVelocityState* particles_prior,
 {
     const int tid = threadIdx.x ;
     const int predict_idx = blockIdx.x*blockDim.x + tid ;
-    if (predict_idx < dev_config.n_particles)
+    if (predict_idx < dev_config.n_particles*dev_config.nPredictParticles)
     {
         const int prior_idx = floor((float)predict_idx/dev_config.nPredictParticles) ;
         ConstantVelocityState oldState = particles_prior[prior_idx] ;
@@ -1173,7 +1174,8 @@ phdPredict(ParticleSLAM& particles, ... )
     }
 
     // map prediction
-    predictMapMixed(particles) ;
+    if(config.dynamicFeatures)
+        predictMapMixed(particles) ;
 
     // log time
     cudaEventRecord( stop,0 ) ;
@@ -1814,7 +1816,7 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
     }
 }
 
-/// perform the gaussian mixture PHD update, and the reduce the resulting mixture
+/// perform the gaussian mixture PHD update
 /**
   PHD update algorithm as in Vo & Ma 2006. Gaussian mixture reduction (merging),
   as in the clustering algorithm by Salmond 1990.
@@ -1838,100 +1840,74 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
         track of which features have already be merged.
     \param particleWeights New particle weights after PHD update
   */
-template<class GaussianType>
 __global__ void
-phdUpdateKernel(GaussianType *inRangeFeatures, int* map_offsets,
-        int n_particles, int n_measure, ConstantVelocityState* poses,
-        GaussianType *updated_features,
-        bool *mergedFlags, REAL *particleWeights )
+phdUpdateKernelStatic(ConstantVelocityState* poses,
+                      Gaussian2D* features_predict,
+                      int* map_offsets,
+                      int n_particles, int n_measure,
+                      Gaussian2D* features_update,
+                      bool* merge_flags,
+                      REAL* particle_weights)
 {
     // shared memory variables
-    __shared__ ConstantVelocityState pose ;
     __shared__ REAL sdata[256] ;
-    __shared__ REAL particle_weight ;
-    __shared__ REAL cardinality_predict ;
-//    __shared__ REAL cardinality_updated ;
-    __shared__ int map_idx ;
-    __shared__ int update_offset ;
-    __shared__ int n_features ;
-    __shared__ int n_update ;
-    __shared__ int predict_offset ;
-    __shared__ int max_feature ;
+
+
+    ConstantVelocityState pose ;
+    REAL particle_weight = 0 ;
+    REAL cardinality_predict = 0 ;
+    int map_idx = 0 ;
+    int update_offset = 0 ;
+    int n_features = 0 ;
+    int n_update = 0 ;
+    int predict_offset = 0 ;
 
 
     // initialize variables
     int tid = threadIdx.x ;
     // pre-update variables
     REAL featurePd = 0 ;
-    REAL K[4] = {0,0,0,0} ;
-    REAL sigmaInv[4] = {0,0,0,0} ;
-    REAL detSigma = 0 ;
     Gaussian2D feature ;
-    RangeBearingMeasurement z_predict ;
-    REAL covUpdate[4] ;
 
     // update variables
-    RangeBearingMeasurement z ;
-    REAL innov[2] = {0,0} ;
-    REAL meanUpdate[2] = {0,0} ;
-    REAL dist = 0 ;
-    REAL logLikelihood = 0 ;
     REAL w_partial = 0 ;
-    REAL weightUpdate = 0 ;
     int updateIdx = 0 ;
+
     // loop over particles
     for ( int p = 0 ; p < n_particles ; p += gridDim.x )
     {
         if ( p + blockIdx.x < n_particles )
         {
-            // initialize shared variables
-            if ( tid == 0 )
-            {
-                map_idx = p + blockIdx.x ;
-                predict_offset = map_offsets[map_idx] ;
-                update_offset = predict_offset*(n_measure+1) +
-                        map_idx*n_measure ;
-                n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
-                n_update = (n_features)*(n_measure+1) + n_measure ;
-                pose = poses[map_idx] ;
-                particle_weight = 0 ;
-                cardinality_predict = 0.0 ;
-//                cardinality_updated = 0.0 ;
-                max_feature = 0 ;
-            }
-            __syncthreads() ;
+            // initialize map-specific variables
+            map_idx = p + blockIdx.x ;
+            predict_offset = map_offsets[map_idx] ;
+            update_offset = predict_offset*(n_measure+1) +
+                    map_idx*n_measure ;
+            n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
+            n_update = (n_features)*(n_measure+1) + n_measure ;
+            pose = poses[map_idx] ;
+            particle_weight = 0 ;
+            cardinality_predict = 0.0 ;
 
             // loop over predicted features + newborn features
             for ( int j = 0 ; j < (n_features+n_measure) ; j += blockDim.x )
             {
                 int feature_idx = j + tid ;
+                w_partial = 0 ;
                 if ( feature_idx < n_features )
                 {
                     // persistent feature
 
                     // get the feature corresponding to the current thread
-                    feature = inRangeFeatures[predict_offset+feature_idx] ;
+                    feature = features_predict[predict_offset+feature_idx] ;
 
-                    /*
-                     * PRECOMPUTE UPDATE COMPONENTS
-                     */
-
-                    computePreUpdateComponents( pose, feature, K, covUpdate,
-                                                &detSigma, sigmaInv, &featurePd,
-                                                &z_predict ) ;
-                    /*
-                     * END PRECOMPUTE UPDATE COMPONENTS
-                     */
-
-                    // save the non-detection term
-                    int nonDetectIdx = update_offset + feature_idx ;
-                    copy_gaussians(feature,updated_features[nonDetectIdx]) ;
-                    REAL nonDetectWeight = feature.weight * (1-featurePd) ;
-                    updated_features[nonDetectIdx].weight = nonDetectWeight ;
-                    if ( nonDetectWeight >= dev_config.minFeatureWeight )
-                        mergedFlags[nonDetectIdx] = false ;
-                    else
-                        mergedFlags[nonDetectIdx] = true ;
+                    Gaussian2D* ptr_nondetect = features_update+update_offset
+                            + feature_idx ;
+                    Gaussian2D* ptr_update = ptr_nondetect + n_features ;
+                    computePreUpdate(pose,feature,n_features,n_measure,
+                                     featurePd,*ptr_nondetect,
+                                     ptr_update);
+                    w_partial = featurePd*feature.weight ;
                 }
                 else if (feature_idx < n_features+n_measure)
                 {
@@ -1939,219 +1915,66 @@ phdUpdateKernel(GaussianType *inRangeFeatures, int* map_offsets,
 
                     // find measurement corresponding to current thread
                     int z_idx = feature_idx - n_features ;
-                    z = Z[z_idx] ;
 
-                    // create the newborn feature from current pose and
-                    // measurement
-                    REAL theta = pose.ptheta + z.bearing ;
-                    REAL dx = z.range*cos(theta) ;
-                    REAL dy = z.range*sin(theta) ;
-
-                    // birth jacobian, not Kalman gain
-                    // (re-purposing variable "K")
-                    K[0] = dx/z.range ;
-                    K[1] = dy/z.range ;
-                    K[2] = -dy ;
-                    K[3] = dx ;
-                    REAL var_range = pow(dev_config.stdRange*dev_config.birthNoiseFactor,2) ;
-                    REAL var_bearing = pow(dev_config.stdBearing*dev_config.birthNoiseFactor,2) ;
-
-                    // save birth terms to updated features array
-                    updateIdx = update_offset + n_features +
-                            n_features*n_measure + z_idx ;
-                    updated_features[updateIdx].weight = dev_config.birthWeight ;
-                    updated_features[updateIdx].mean[0] = pose.px + dx ;
-                    updated_features[updateIdx].mean[1] = pose.py + dy ;
-                    // upper 2x2 block of covariance matrix = K*R*K'
-                    updated_features[updateIdx].cov[0] = pow(K[0],2)*var_range +
-                            pow(K[2],2)*var_bearing ;
-                    updated_features[updateIdx].cov[1] = K[0]*K[1]*var_range +
-                            K[2]*K[3]*var_bearing ;
-                    updated_features[updateIdx].cov[2] =
-                            updated_features[updateIdx].cov[1] ;
-                    updated_features[updateIdx].cov[3] = pow(K[1],2)*var_range +
-                            pow(K[3],2)*var_bearing ;
+                    Gaussian2D* ptr_birth = features_update +
+                            update_offset + n_features
+                            + n_measure*n_features + z_idx ;
+                    computeBirth(pose,Z[z_idx],*ptr_birth);
 
                     // set Pd to 1 for newborn features
-                    featurePd = 1 ;
+                    w_partial = 0 ;
                     // no non-detection term for newborn features
+                    if(tid==0 && map_idx==0)
+                    {
+                        if ( feature_idx == n_features)
+                        {
+                            cuPrintf("before: %f\n",ptr_birth->weight) ;
+                            ptr_birth->weight = safeLog(dev_config.birthWeight) ;
+                            cuPrintf("after: %f\n",ptr_birth->weight) ;
+                        }
+                    }
                 }
                 else
                 {
                     // thread does not correspond to a feature
-                    featurePd = 0 ;
-                    feature.weight = -FLT_MAX ;
-                    for (int i = 0 ; i < 16 ; i++)
-                        covUpdate[i] = 0 ;
-                }
-
-                // predicted cardinality = sum of weights*pd
-                if (feature_idx < n_features)
-                    w_partial = feature.weight*featurePd ;
-                else
                     w_partial = 0 ;
+                }
+
+                // compute predicted cardinality
                 sumByReduction(sdata, w_partial, tid) ;
-                if ( tid == 0 )
-                    cardinality_predict += sdata[0] ;
-                __syncthreads() ;
-
-
-                /*
-                 * LOOP THROUGH MEASUREMENTS AND DO UPDATE FOR DETECTION TERMS
-                 */
-                for (int i = 0 ; i < n_measure ; i++ )
-                {
-                    z = Z[i] ;
-                    if ( feature_idx < n_features)
-                    {
-                        updateIdx = update_offset + n_features + i*(n_features) + feature_idx ;
-                        // compute innovation
-                        innov[0] = z.range - z_predict.range ;
-                        innov[1] = wrapAngle( z.bearing - z_predict.bearing ) ;
-                        // compute updated mean
-                        meanUpdate[0] = feature.mean[0] + K[0]*innov[0] + K[2]*innov[1] ;
-                        meanUpdate[1] = feature.mean[1] + K[1]*innov[0] + K[3]*innov[1] ;
-                        // compute single object likelihood
-                        dist = innov[0]*innov[0]*sigmaInv[0] +
-                                innov[0]*innov[1]*(sigmaInv[1] + sigmaInv[2]) +
-                                innov[1]*innov[1]*sigmaInv[3] ;
-
-                        // Gating for measurement update
-                        if ( dev_config.gateMeasurements && dist > dev_config.gateThreshold)
-                            dist = 123456.789 ;
-
-                        // partially updated weight
-                        w_partial = 66666666 ;
-                        if ( featurePd > 0 )
-                        {
-                            logLikelihood = safeLog(featurePd) + safeLog(feature.weight)
-                                    - 0.5*dist -  0.5*safeLog(2*M_PI*detSigma) ;
-                            w_partial = logLikelihood ;
-                        }
-                        else
-                        {
-                            w_partial = -123456.789 ;
-                        }
-                        // save updated gaussian with partially updated weight
-//                        if (map_idx == 13)
-//                            cuPrintf("[%d,%d,%f,%f,%f,%f,%f]\n",tid,updateIdx,featurePd,feature.weight,dist,detSigma,w_partial) ;
-                        updated_features[updateIdx].weight = w_partial ;
-                        for ( int j = 0 ; j < 4 ; j++)
-                        {
-                            if(j < 2)
-                                updated_features[updateIdx].mean[j] = meanUpdate[j] ;
-                            updated_features[updateIdx].cov[j] = covUpdate[j] ;
-                        }
-//                        force_symmetric_covariance(updated_features[updateIdx]) ;
-                    }
-                }
-            }
-
-            // choose the feature for the single-feature particle weight update
-            if ( dev_config.particleWeighting == 2 )
-            {
-                REAL max_weight = -FLT_MAX ;
-                for ( int n = 0 ; n < (n_features) ; n += blockDim.x )
-                {
-                    sdata[tid] = -FLT_MAX ;
-                    __syncthreads() ;
-                    if ( tid+n < (n_features))
-                    {
-                        for ( int i = 0 ;i < n_measure ; i += 1 )
-                        {
-                            int idx = update_offset + (i+1)*(n_features) + tid + n ;
-                            sdata[tid] = fmax(sdata[tid],updated_features[idx].weight ) ;
-                        }
-                    }
-                    __syncthreads() ;
-                    if ( tid == 0 )
-                    {
-                        for ( int i = 0 ; i < blockDim.x ; i++ )
-                        {
-                            if (sdata[i] > max_weight )
-                            {
-                                max_feature = n+i ;
-                                max_weight = sdata[i] ;
-                            }
-                        }
-
-                    }
-                    __syncthreads() ;
-                }
-                REAL tmp = 0 ;
-                if ( tid < n_measure )
-                {
-                    int idx = update_offset + n_features
-                            + tid*(n_features) + max_feature ;
-                    tmp = exp(updated_features[idx].weight) ;
-                }
-                sumByReduction(sdata,tmp,tid) ;
-                __syncthreads() ;
-                if ( tid == 0 )
-                {
-                    particle_weight = updated_features[update_offset+max_feature].weight*pow(dev_config.clutterDensity,n_measure)
-                            + pow(dev_config.clutterDensity,n_measure-1)*sdata[0] ;
-                }
+                cardinality_predict += sdata[0] ;
                 __syncthreads() ;
             }
 
             // compute the weight normalizers
-            __syncthreads() ;
             for ( int i = 0 ; i < n_measure ; i++ )
             {
                 REAL log_normalizer = 0 ;
-                REAL val = -FLT_MAX ;
+                REAL val = 0 ;
                 REAL sum = 0 ;
+                Gaussian2D* ptr_update = features_update
+                        + update_offset + n_features + i*n_features ;
+//                cuPrintf("%f\n",features_update[0].weight) ;
                 if (n_features > 0)
                 {
                     // find the maximum from all the log partial weights
                     for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
                     {
-                        int feature_idx = j+tid ;
+                        int feature_idx = j + tid ;
                         if ( feature_idx < n_features )
-                        {
-                            updateIdx = update_offset + n_features + i*n_features + feature_idx ;
-                            w_partial = updated_features[updateIdx].weight ;
-                        }
+                            val = exp(ptr_update[feature_idx].weight) ;
                         else
-                        {
-                            w_partial = -FLT_MAX ;
-                        }
-                        maxByReduction( sdata, w_partial, tid ) ;
-                        val = fmax(val,sdata[0]) ;
-                        __syncthreads() ;
-                    }
-
-                    // do the exponent sum
-                    for ( int j = 0 ; j < n_features ; j += blockDim.x )
-                    {
-                        int feature_idx = j+tid ;
-                        if ( feature_idx < n_features )
-                        {
-                            updateIdx = update_offset + n_features + i*n_features + feature_idx ;
-                            w_partial = exp(updated_features[updateIdx].weight-val) ;
-                        }
-                        else
-                        {
-                            w_partial = 0 ;
-                        }
-                        sumByReduction( sdata, w_partial, tid ) ;
+                            val = 0 ;
+                        sumByReduction(sdata,val,tid);
                         sum += sdata[0] ;
-                        __syncthreads() ;
                     }
 
-                    // add back the offset value from logsumexp, and add clutter
-                    // density and birth weight
-                    sum = exp(safeLog(sum) + val) ;
+                    // add clutter density and birth weight
                     sum += dev_config.clutterDensity ;
                     sum += dev_config.birthWeight ;
 
-                    // put back in log form
+                    // put normalizer in log form
                     log_normalizer = safeLog(sum) ;
-//                    if (log_normalizer > 0)
-//                    {
-//                        cuPrintf("sum = %f\n",sum) ;
-//                    }
                 }
                 else
                 {
@@ -2159,631 +1982,55 @@ phdUpdateKernel(GaussianType *inRangeFeatures, int* map_offsets,
                     log_normalizer = safeLog(sum) ;
                 }
 
-                // update the pose particle weights
-                if ( tid == 0 && dev_config.particleWeighting == 0 )
-                {
-                    particle_weight += log_normalizer ;
-                    if (particle_weight > 0 && map_idx==13 && i == 0)
-                    {
-                        cuPrintf("n_features = %d\n",n_features) ;
-                        cuPrintf("update_offset = %d\n",update_offset) ;
-//                        cuPrintf("map_offsets=[%d",map_offsets[0]) ;
-//                        for ( int k = 1 ; k < gridDim.x ; k++ )
-//                        {
-//                            cuPrintf(", %d",map_offsets[k]) ;
-//                        }
-//                        cuPrintf("]\n") ;
-//                        for ( int k = 0 ; k < n_update ; k++ )
-//                        {
-//                            cuPrintf("[%d,%d,%d, %f,%f,%f,%f,%f]\n",map_idx,i,k,
-//                                     updated_features[update_offset+k].weight,
-//                                     updated_features[update_offset+k].mean[0],
-//                                     updated_features[update_offset+k].mean[1],
-//                                     updated_features[update_offset+k].mean[2],
-//                                     updated_features[update_offset+k].mean[3]) ;
-//                            cuPrintf("cov_update[%d] = [%f",k,updated_features[update_offset+k].cov[0]) ;
-//                            for ( int l = 1 ; l < 16 ; l++ )
-//                            {
-//                                cuPrintf(", %f",updated_features[update_offset+k].cov[l]) ;
-//                            }
-//                            cuPrintf("]\n") ;
-//                        }
-                    }
-                }
-                __syncthreads() ;
-
                 // compute final feature weights
                 for ( int j = 0 ; j < (n_features+1) ; j += blockDim.x )
                 {
                     int feature_idx = j + tid ;
-                    if ( feature_idx < n_features )
+                    if ( feature_idx <= n_features)
                     {
-                        // update detection weight
-                        updateIdx = update_offset + n_features + i*(n_features) + feature_idx ;
-                        weightUpdate = exp(updated_features[updateIdx].weight - log_normalizer) ;
-                        updated_features[updateIdx].weight = weightUpdate ;
-                        // check if updated feature should be retained for
-                        // GM merging step
-                        if ( weightUpdate >= dev_config.minFeatureWeight)
-                            mergedFlags[updateIdx] = false ;
-                        else
-                            mergedFlags[updateIdx] = true ;
-                    }
-                    else if ( feature_idx == n_features )
-                    {
-                        // update birth term weight
-                        updateIdx = update_offset + n_features +
-                                n_features*n_measure + i ;
-                        weightUpdate = updated_features[updateIdx].weight/sum ;
-                        // check if updated feature should be retained for
-                        // GM merging step
-                        if ( weightUpdate >= dev_config.minFeatureWeight)
-                            mergedFlags[updateIdx] = false ;
-                        else
-                            mergedFlags[updateIdx] = true ;
+                        if ( feature_idx < n_features )
+                        {
+                            // update detection weight
+                            updateIdx = feature_idx ;
+                        }
+                        else if ( feature_idx == n_features )
+                        {
+                            // update birth term weight
+                            updateIdx = (n_measure-i)*n_features + i ;
+//                            cuPrintf("%d\n",updateIdx) ;
+                        }
+                        ptr_update[updateIdx].weight =
+                            exp(ptr_update[updateIdx].weight-log_normalizer) ;
                     }
                 }
+
+                // update the pose particle weights
+                if ( tid == 0 )
+                {
+                    particle_weight += log_normalizer ;
+                }
             }
+
 
             // Particle weighting
             __syncthreads() ;
-            // Cluster-PHD particle weighting
-            if ( dev_config.particleWeighting == 0 )
+            if ( tid == 0 )
             {
-                if ( tid == 0 )
-                {
-                    particle_weight -= cardinality_predict ;
-                    particleWeights[map_idx] = particle_weight ;
-                }
-            }
-            // Vo-EmptyMap particle weighting
-            else if ( dev_config.particleWeighting == 1 )
-            {
-                REAL cn_predict = 0 ;
-                REAL cn_update = 0 ;
-
-                // predicted cardinality
-                for ( int i = 0 ; i < (n_features+n_measure) ; i+= blockDim.x)
-                {
-                    if ( tid + i < (n_features+n_measure) )
-                        w_partial = inRangeFeatures[predict_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction(sdata,w_partial,tid);
-                    cn_predict += sdata[0] ;
-                    __syncthreads() ;
-                }
-
-                // updated cardinality = sum of updated weights
-                for ( int i = 0 ; i < n_update ; i += blockDim.x )
-                {
-                    // to avoid divergence in the reduction function call, load weight
-                    // into temp variable first
-                    if ( tid + i < n_update )
-                        w_partial = updated_features[update_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction( sdata, w_partial, tid );
-                    if ( tid == 0 )
-                        cn_update += sdata[0] ;
-                    __syncthreads() ;
-                }
-                // thread 0 computes the weight for the pose particle
-                if ( tid == 0 )
-                {
-                    particleWeights[map_idx] = n_measure*safeLog(dev_config.clutterDensity)
-                            + cn_update - cn_predict
-                            - dev_config.clutterRate  ;
-                }
-            }
-            // Single-Feature IID cluster assumption
-            else if ( dev_config.particleWeighting == 2 )
-            {
-                if ( tid == 0 )
-                {
-                    // thread 0 updates the pose particle weight
-                    w_partial = 0 ;
-                    for ( int i = 0 ; i <= n_measure ; i++ )
-                        w_partial += updated_features[update_offset + i*n_features + max_feature].weight ;
-                    REAL log_den = safeLog(w_partial) ;
-                    particleWeights[map_idx] = safeLog(particle_weight) - log_den ;
-                }
+                particle_weight -= cardinality_predict ;
+                particle_weights[map_idx] = particle_weight ;
             }
         }
-    }
-}
-
-// specialized phdUpdateKernel for 4D dynamic featuress
-template<>
-__global__ void
-phdUpdateKernel<Gaussian4D>(Gaussian4D *inRangeFeatures, int* map_offsets,
-        int n_particles, int n_measure, ConstantVelocityState* poses,
-        Gaussian4D *updated_features,
-        bool *mergedFlags, REAL *particleWeights )
-{
-    // shared memory variables
-    __shared__ ConstantVelocityState pose ;
-    __shared__ REAL sdata[256] ;
-    __shared__ REAL particle_weight ;
-    __shared__ REAL cardinality_predict ;
-//    __shared__ REAL cardinality_updated ;
-    __shared__ int map_idx ;
-    __shared__ int update_offset ;
-    __shared__ int n_features ;
-    __shared__ int n_update ;
-    __shared__ int predict_offset ;
-    __shared__ int max_feature ;
-
-
-    // initialize variables
-    int tid = threadIdx.x ;
-    // pre-update variables
-    REAL featurePd = 0 ;
-    REAL K[8] = {0,0,0,0,0,0,0,0} ;
-    REAL sigmaInv[4] = {0,0,0,0} ;
-    REAL detSigma = 0 ;
-    Gaussian4D feature ;
-    RangeBearingMeasurement z_predict ;
-    REAL covUpdate[16] = {0,0,0,0
-                         ,0,0,0,0
-                         ,0,0,0,0
-                         ,0,0,0,0} ;
-
-    // update variables
-    RangeBearingMeasurement z ;
-    REAL innov[2] = {0,0} ;
-    REAL meanUpdate[4] = {0,0,0,0} ;
-    REAL dist = 0 ;
-    REAL logLikelihood = 0 ;
-    REAL w_partial = 0 ;
-    REAL weightUpdate = 0 ;
-    int updateIdx = 0 ;
-    // loop over particles
-    for ( int p = 0 ; p < n_particles ; p += gridDim.x )
-    {
-        if ( p + blockIdx.x < n_particles )
+        // set the merging flags
+        for ( int j = 0 ; j < n_update ; j+=blockDim.x)
         {
-            // initialize shared variables
-            if ( tid == 0 )
+            int feature_idx = j+tid ;
+            if (feature_idx < n_update)
             {
-                map_idx = p + blockIdx.x ;
-                predict_offset = map_offsets[map_idx] ;
-                update_offset = predict_offset*(n_measure+1) +
-                        map_idx*n_measure ;
-                n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
-                n_update = (n_features)*(n_measure+1) + n_measure ;
-                pose = poses[map_idx] ;
-                particle_weight = 0 ;
-                cardinality_predict = 0.0 ;
-//                cardinality_updated = 0.0 ;
-                max_feature = 0 ;
-            }
-            __syncthreads() ;
-
-            // loop over predicted features + newborn features
-            for ( int j = 0 ; j < (n_features+n_measure) ; j += blockDim.x )
-            {
-                int feature_idx = j + tid ;
-                if ( feature_idx < n_features )
-                {
-                    // persistent feature
-
-                    // get the feature corresponding to the current thread
-                    feature = inRangeFeatures[predict_offset+feature_idx] ;
-
-                    /*
-                     * PRECOMPUTE UPDATE COMPONENTS
-                     */
-
-                    computePreUpdateComponentsDynamic( pose, feature, K, covUpdate,
-                                                &detSigma, sigmaInv, &featurePd,
-                                                &z_predict ) ;
-//                    if (tid==0 && blockIdx.x == 0)
-//                    {
-//                        cuPrintf("z_predict = [%f %f]\n",z_predict.range,z_predict.bearing) ;
-//                        cuPrintf("sigmaInv = [%f %f %f %f]\n",sigmaInv[0],sigmaInv[1],sigmaInv[2],sigmaInv[3]) ;
-//                        cuPrintf("covUpdate = [%f",covUpdate[0]) ;
-//                        for ( int k = 1 ; k < 16 ; k++ )
-//                            cuPrintf(", %f",covUpdate[k]) ;
-//                        cuPrintf("]\n") ;
-//                    }
-                    /*
-                     * END PRECOMPUTE UPDATE COMPONENTS
-                     */
-
-                    // save the non-detection term
-                    int nonDetectIdx = update_offset + feature_idx ;
-                    copy_gaussians(feature,updated_features[nonDetectIdx]) ;
-                    REAL nonDetectWeight = feature.weight * (1-featurePd) ;
-                    updated_features[nonDetectIdx].weight = nonDetectWeight ;
-                    if ( nonDetectWeight >= dev_config.minFeatureWeight )
-                        mergedFlags[nonDetectIdx] = false ;
-                    else
-                        mergedFlags[nonDetectIdx] = true ;
-                }
-                else if (feature_idx < n_features+n_measure)
-                {
-                    // newborn feature
-
-                    // find measurement corresponding to current thread
-                    int z_idx = feature_idx - n_features ;
-                    z = Z[z_idx] ;
-
-                    // create the newborn feature from current pose and
-                    // measurement
-                    REAL theta = pose.ptheta + z.bearing ;
-                    REAL dx = z.range*cos(theta) ;
-                    REAL dy = z.range*sin(theta) ;
-
-                    // birth jacobian, not Kalman gain
-                    // (re-purposing variable "K")
-                    K[0] = dx/z.range ;
-                    K[1] = dy/z.range ;
-                    K[2] = -dy ;
-                    K[3] = dx ;
-                    REAL var_range = pow(dev_config.stdRange*dev_config.birthNoiseFactor,2) ;
-                    REAL var_bearing = pow(dev_config.stdBearing*dev_config.birthNoiseFactor,2) ;
-
-                    // save birth terms to updated features array
-                    updateIdx = update_offset + n_features +
-                            n_features*n_measure + z_idx ;
-                    updated_features[updateIdx].weight = dev_config.birthWeight ;
-                    updated_features[updateIdx].mean[0] = pose.px + dx ;
-                    updated_features[updateIdx].mean[1] = pose.py + dy ;
-                    updated_features[updateIdx].mean[2] = 0 ;
-                    updated_features[updateIdx].mean[3] = 0 ;
-                    // upper 2x2 block of covariance matrix = K*R*K'
-                    updated_features[updateIdx].cov[0] = pow(K[0],2)*var_range +
-                            pow(K[2],2)*var_bearing ;
-                    updated_features[updateIdx].cov[1] = K[0]*K[1]*var_range +
-                            K[2]*K[3]*var_bearing ;
-                    updated_features[updateIdx].cov[4] =
-                            updated_features[updateIdx].cov[1] ;
-                    updated_features[updateIdx].cov[5] = pow(K[1],2)*var_range +
-                            pow(K[3],2)*var_bearing ;
-                    // lower 2 diagonal terms set to parameter value
-                    updated_features[updateIdx].cov[10] = dev_config.covVxBirth ;
-                    updated_features[updateIdx].cov[15] = dev_config.covVyBirth ;
-                    // everything else set to 0
-                    updated_features[updateIdx].cov[2] = 0 ;
-                    updated_features[updateIdx].cov[3] = 0 ;
-                    updated_features[updateIdx].cov[6] = 0 ;
-                    updated_features[updateIdx].cov[7] = 0 ;
-                    updated_features[updateIdx].cov[8] = 0 ;
-                    updated_features[updateIdx].cov[9] = 0 ;
-                    updated_features[updateIdx].cov[11] = 0 ;
-                    updated_features[updateIdx].cov[12] = 0 ;
-                    updated_features[updateIdx].cov[13] = 0 ;
-                    updated_features[updateIdx].cov[14] = 0 ;
-
-//                    // compute pre-update components for newborn feature
-//                    computePreUpdateComponentsDynamic( pose, feature, K, covUpdate,
-//                                                &detSigma, sigmaInv, &featurePd,
-//                                                &z_predict ) ;
-                    // set Pd to 1 for newborn features
-                    featurePd = 1 ;
-                    // no non-detection term for newborn features
-                }
+                int idx = update_offset+feature_idx ;
+                if (features_update[idx].weight<dev_config.minFeatureWeight)
+                    merge_flags[idx] = true ;
                 else
-                {
-                    // thread does not correspond to a feature
-                    featurePd = 0 ;
-                    feature.weight = -FLT_MAX ;
-                    for (int i = 0 ; i < 16 ; i++)
-                        covUpdate[i] = 0 ;
-                }
-
-                // predicted cardinality = sum of weights*pd
-                if (feature_idx < n_features)
-                    w_partial = feature.weight*featurePd ;
-                else
-                    w_partial = 0 ;
-                sumByReduction(sdata, w_partial, tid) ;
-                if ( tid == 0 )
-                    cardinality_predict += sdata[0] ;
-                __syncthreads() ;
-
-
-                /*
-                 * LOOP THROUGH MEASUREMENTS AND DO UPDATE FOR DETECTION TERMS
-                 */
-                for (int i = 0 ; i < n_measure ; i++ )
-                {
-                    z = Z[i] ;
-                    if ( feature_idx < n_features)
-                    {
-                        updateIdx = update_offset + n_features + i*(n_features) + feature_idx ;
-                        // compute innovation
-                        innov[0] = z.range - z_predict.range ;
-                        innov[1] = wrapAngle( z.bearing - z_predict.bearing ) ;
-                        // compute updated mean
-                        meanUpdate[0] = feature.mean[0] + K[0]*innov[0] + K[4]*innov[1] ;
-                        meanUpdate[1] = feature.mean[1] + K[1]*innov[0] + K[5]*innov[1] ;
-                        meanUpdate[2] = feature.mean[2] + K[2]*innov[0] + K[6]*innov[1] ;
-                        meanUpdate[3] = feature.mean[3] + K[3]*innov[0] + K[7]*innov[1] ;
-                        // compute single object likelihood
-                        dist = innov[0]*innov[0]*sigmaInv[0] +
-                                innov[0]*innov[1]*(sigmaInv[1] + sigmaInv[2]) +
-                                innov[1]*innov[1]*sigmaInv[3] ;
-
-                        if (blockIdx.x==0 && dist < 0)
-                        {
-                            cuPrintf("[%d,%d],%f,[%f,%f,%f,%f]\n",
-                                     feature_idx,updateIdx,detSigma,
-                                     sigmaInv[0],sigmaInv[1],sigmaInv[2],sigmaInv[3]) ;
-                        }
-                        // Gating for measurement update
-                        if ( dev_config.gateMeasurements && dist > dev_config.gateThreshold)
-                            dist = 123456.789 ;
-
-                        // partially updated weight
-                        w_partial = 66666666 ;
-                        if ( featurePd > 0 )
-                        {
-                            logLikelihood = safeLog(featurePd) + safeLog(feature.weight)
-                                    - 0.5*dist -  0.5*safeLog(2*M_PI*detSigma) ;
-                            w_partial = logLikelihood ;
-                        }
-                        else
-                        {
-                            w_partial = -123456.789 ;
-                        }
-                        // save updated gaussian with partially updated weight
-//                        if (map_idx == 13)
-//                            cuPrintf("[%d,%d,%f,%f,%f,%f,%f]\n",tid,updateIdx,featurePd,feature.weight,dist,detSigma,w_partial) ;
-                        updated_features[updateIdx].weight = w_partial ;
-                        for ( int j = 0 ; j < 16 ; j++)
-                        {
-                            if(j < 4)
-                                updated_features[updateIdx].mean[j] = meanUpdate[j] ;
-                            updated_features[updateIdx].cov[j] = covUpdate[j] ;
-                        }
-//                        force_symmetric_covariance(updated_features[updateIdx]) ;
-                    }
-                }
-            }
-
-            // choose the feature for the single-feature particle weight update
-            if ( dev_config.particleWeighting == 2 )
-            {
-                REAL max_weight = -FLT_MAX ;
-                for ( int n = 0 ; n < (n_features) ; n += blockDim.x )
-                {
-                    sdata[tid] = -FLT_MAX ;
-                    __syncthreads() ;
-                    if ( tid+n < (n_features))
-                    {
-                        for ( int i = 0 ;i < n_measure ; i += 1 )
-                        {
-                            int idx = update_offset + (i+1)*(n_features) + tid + n ;
-                            sdata[tid] = fmax(sdata[tid],updated_features[idx].weight ) ;
-                        }
-                    }
-                    __syncthreads() ;
-                    if ( tid == 0 )
-                    {
-                        for ( int i = 0 ; i < blockDim.x ; i++ )
-                        {
-                            if (sdata[i] > max_weight )
-                            {
-                                max_feature = n+i ;
-                                max_weight = sdata[i] ;
-                            }
-                        }
-
-                    }
-                    __syncthreads() ;
-                }
-                REAL tmp = 0 ;
-                if ( tid < n_measure )
-                {
-                    int idx = update_offset + n_features
-                            + tid*(n_features) + max_feature ;
-                    tmp = exp(updated_features[idx].weight) ;
-                }
-                sumByReduction(sdata,tmp,tid) ;
-                __syncthreads() ;
-                if ( tid == 0 )
-                {
-                    particle_weight = updated_features[update_offset+max_feature].weight*pow(dev_config.clutterDensity,n_measure)
-                            + pow(dev_config.clutterDensity,n_measure-1)*sdata[0] ;
-                }
-                __syncthreads() ;
-            }
-
-            // compute the weight normalizers
-            __syncthreads() ;
-            for ( int i = 0 ; i < n_measure ; i++ )
-            {
-                REAL log_normalizer = 0 ;
-                REAL val = -FLT_MAX ;
-                REAL sum = 0 ;
-                if (n_features > 0)
-                {
-                    // find the maximum from all the log partial weights
-                    for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
-                    {
-                        int feature_idx = j+tid ;
-                        if ( feature_idx < n_features )
-                        {
-                            updateIdx = update_offset + n_features + i*n_features + feature_idx ;
-                            w_partial = updated_features[updateIdx].weight ;
-                        }
-                        else
-                        {
-                            w_partial = -FLT_MAX ;
-                        }
-                        maxByReduction( sdata, w_partial, tid ) ;
-                        val = fmax(val,sdata[0]) ;
-                        __syncthreads() ;
-                    }
-
-                    // do the exponent sum
-                    for ( int j = 0 ; j < n_features ; j += blockDim.x )
-                    {
-                        int feature_idx = j+tid ;
-                        if ( feature_idx < n_features )
-                        {
-                            updateIdx = update_offset + n_features + i*n_features + feature_idx ;
-                            w_partial = exp(updated_features[updateIdx].weight-val) ;
-                        }
-                        else
-                        {
-                            w_partial = 0 ;
-                        }
-                        sumByReduction( sdata, w_partial, tid ) ;
-                        sum += sdata[0] ;
-                        __syncthreads() ;
-                    }
-
-                    // add back the offset value from logsumexp, and add clutter
-                    // density and birth weight
-                    sum = exp(safeLog(sum) + val) ;
-                    sum += dev_config.clutterDensity ;
-                    sum += dev_config.birthWeight ;
-
-                    // put back in log form
-                    log_normalizer = safeLog(sum) ;
-//                    if (log_normalizer > 0)
-//                    {
-//                        cuPrintf("sum = %f\n",sum) ;
-//                    }
-                }
-                else
-                {
-                    sum = dev_config.clutterDensity + dev_config.birthWeight ;
-                    log_normalizer = safeLog(sum) ;
-                }
-
-                // update the pose particle weights
-                if ( tid == 0 && dev_config.particleWeighting == 0 )
-                {
-                    particle_weight += log_normalizer ;
-                    if (particle_weight > 0 && map_idx==13 && i == 0)
-                    {
-                        cuPrintf("n_features = %d\n",n_features) ;
-                        cuPrintf("update_offset = %d\n",update_offset) ;
-//                        cuPrintf("map_offsets=[%d",map_offsets[0]) ;
-//                        for ( int k = 1 ; k < gridDim.x ; k++ )
-//                        {
-//                            cuPrintf(", %d",map_offsets[k]) ;
-//                        }
-//                        cuPrintf("]\n") ;
-//                        for ( int k = 0 ; k < n_update ; k++ )
-//                        {
-//                            cuPrintf("[%d,%d,%d, %f,%f,%f,%f,%f]\n",map_idx,i,k,
-//                                     updated_features[update_offset+k].weight,
-//                                     updated_features[update_offset+k].mean[0],
-//                                     updated_features[update_offset+k].mean[1],
-//                                     updated_features[update_offset+k].mean[2],
-//                                     updated_features[update_offset+k].mean[3]) ;
-//                            cuPrintf("cov_update[%d] = [%f",k,updated_features[update_offset+k].cov[0]) ;
-//                            for ( int l = 1 ; l < 16 ; l++ )
-//                            {
-//                                cuPrintf(", %f",updated_features[update_offset+k].cov[l]) ;
-//                            }
-//                            cuPrintf("]\n") ;
-//                        }
-                    }
-                }
-                __syncthreads() ;
-
-                // compute final feature weights
-                for ( int j = 0 ; j < (n_features+1) ; j += blockDim.x )
-                {
-                    int feature_idx = j + tid ;
-                    if ( feature_idx < n_features )
-                    {
-                        // update detection weight
-                        updateIdx = update_offset + n_features + i*(n_features) + feature_idx ;
-                        weightUpdate = exp(updated_features[updateIdx].weight - log_normalizer) ;
-                        updated_features[updateIdx].weight = weightUpdate ;
-                        // check if updated feature should be retained for
-                        // GM merging step
-                        if ( weightUpdate >= dev_config.minFeatureWeight)
-                            mergedFlags[updateIdx] = false ;
-                        else
-                            mergedFlags[updateIdx] = true ;
-                    }
-                    else if ( feature_idx == n_features )
-                    {
-                        // update birth term weight
-                        updateIdx = update_offset + n_features +
-                                n_features*n_measure + i ;
-                        weightUpdate = updated_features[updateIdx].weight/sum ;
-                        // check if updated feature should be retained for
-                        // GM merging step
-                        if ( weightUpdate >= dev_config.minFeatureWeight)
-                            mergedFlags[updateIdx] = false ;
-                        else
-                            mergedFlags[updateIdx] = true ;
-                    }
-                }
-            }
-
-            // Particle weighting
-            __syncthreads() ;
-            // Cluster-PHD particle weighting
-            if ( dev_config.particleWeighting == 0 )
-            {
-                if ( tid == 0 )
-                {
-                    particle_weight -= cardinality_predict ;
-                    particleWeights[map_idx] = particle_weight ;  
-                }
-            }
-            // Vo-EmptyMap particle weighting
-            else if ( dev_config.particleWeighting == 1 )
-            {
-                REAL cn_predict = 0 ;
-                REAL cn_update = 0 ;
-
-                // predicted cardinality
-                for ( int i = 0 ; i < (n_features+n_measure) ; i+= blockDim.x)
-                {
-                    if ( tid + i < (n_features+n_measure) )
-                        w_partial = inRangeFeatures[predict_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction(sdata,w_partial,tid);
-                    cn_predict += sdata[0] ;
-                    __syncthreads() ;
-                }
-
-                // updated cardinality = sum of updated weights
-                for ( int i = 0 ; i < n_update ; i += blockDim.x )
-                {
-                    // to avoid divergence in the reduction function call, load weight
-                    // into temp variable first
-                    if ( tid + i < n_update )
-                        w_partial = updated_features[update_offset+i+tid].weight ;
-                    else
-                        w_partial = 0.0f ;
-                    sumByReduction( sdata, w_partial, tid );
-                    if ( tid == 0 )
-                        cn_update += sdata[0] ;
-                    __syncthreads() ;
-                }
-                // thread 0 computes the weight for the pose particle
-                if ( tid == 0 )
-                {
-                    particleWeights[map_idx] = n_measure*safeLog(dev_config.clutterDensity)
-                            + cn_update - cn_predict
-                            - dev_config.clutterRate  ;
-                }
-            }
-            // Single-Feature IID cluster assumption
-            else if ( dev_config.particleWeighting == 2 )
-            {
-                if ( tid == 0 )
-                {
-                    // thread 0 updates the pose particle weight
-                    w_partial = 0 ;
-                    for ( int i = 0 ; i <= n_measure ; i++ )
-                        w_partial += updated_features[update_offset + i*n_features + max_feature].weight ;
-                    REAL log_den = safeLog(w_partial) ;
-                    particleWeights[map_idx] = safeLog(particle_weight) - log_den ;
-                }
+                    merge_flags[idx] = false;
             }
         }
     }
@@ -2934,13 +2181,6 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                 __syncthreads() ;
             }
 
-//            if(tid==0)
-//            {
-//                int m = 1 ;
-//                cuPrintf("dynamic detect terms for m=%d: \n",m) ;
-//                for ( int j = 0 ; j < n_features_dynamic ; j++ )
-//                    print_feature(features_update_dynamic[(m+1)*n_features_dynamic+j]) ;
-//            }
 
             // finish updating weights - loop over measurements
             for ( int m = 0 ; m < n_measure ; m++ )
@@ -2978,16 +2218,13 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                     }
                     sumByReduction(sdata,val,tid);
                     normalizer += sdata[0] ;
-//                    if (tid==0)
-//                        cuPrintf("m=%d  normalizer=%f\n",m,sdata[0]) ;
                 }
                 normalizer += dev_config.clutterDensity
                         + 2*dev_config.birthWeight ;
                 normalizer = safeLog(normalizer) ;
 
                 // loop through features corresponding to current measurement,
-                // and divide by normalizer. check that resulting weight is
-                // above the minimum.
+                // and divide by normalizer.
                 for ( int j = 0 ; j < n_features_static+1+n_features_dynamic+1 ; j+=blockDim.x )
                 {
                     feature_idx = j+tid ;
@@ -3006,21 +2243,8 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                         {
                             idx_update = (n_measure-m)*n_features_static + m ;
                         }
-//                        if (feature_idx == 0)
-//                        {
-//                            cuPrintf("normalizer: %f\tun-normalized weight: %f\n",
-//                                     normalizer, ptr_static[idx_update].weight) ;
-//                        }
                         ptr_static[idx_update].weight =
                                 exp(ptr_static[idx_update].weight - normalizer) ;
-//                        if(ptr_static[idx_update].weight < dev_config.minFeatureWeight)
-//                        {
-//                            merge_flags_static[idx_update] = true ;
-//                        }
-//                        else
-//                        {
-//                            merge_flags_static[idx_update] = false ;
-//                        }
                     }
                     else if(is_dynamic)
                     {
@@ -3036,33 +2260,18 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                         }
                         ptr_dynamic[idx_update].weight =
                                 exp(ptr_dynamic[idx_update].weight - normalizer) ;
-//                        if(ptr_dynamic[idx_update].weight < dev_config.minFeatureWeight)
-//                        {
-//                            merge_flags_dynamic[idx_update] = true ;
-//                        }
-//                        else
-//                        {
-//                            merge_flags_dynamic[idx_update] = false ;
-//                        }
                     }
                 }
 
                 // multiply particle weight update by normalizer
+                __syncthreads() ;
                 particle_weight += normalizer ;
             }
 
-//            if(tid==0)
-//            {
-//                Gaussian4D* ptr_update = features_update_dynamic
-//                        + update_offset_dynamic ;
-//                cuPrintf("Update results: \n") ;
-//                for (int j = 0 ; j < n_features_dynamic*(n_measure+1)+n_measure ; j++ )
-//                    print_feature(ptr_update[j]) ;
-//            }
-
             // finish updating particle weight
             particle_weight -= cardinality_predict ;
-            particle_weights[map_idx] = particle_weight ;
+            if ( tid == 0)
+                particle_weights[map_idx] = particle_weight ;
         }
 
         // set the merging flags
@@ -3633,11 +2842,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
             offset_out += n_out_range1_vec[i] ;
         }
     }
-//    cout << "first copied feature: " << endl ;
-//    cout << maps_output[0][0].weight << " " << maps_output[0][0].mean[0]
-//         << " " << maps_output[0][0].mean[1] << " " << maps_output[0][0].cov[0]
-//         << " " << maps_output[0][0].cov[1] << " " << maps_output[0][0].cov[2]
-//         << " " << maps_output[0][0].cov[3] << endl ;
+
     free(maps_merged) ;
     free(map_sizes_merged) ;
     CUDA_SAFE_CALL( cudaFree( dev_maps_combined ) ) ;
@@ -3730,13 +2935,16 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                          features_in_static, features_out1_static,
                          features_out2_static, n_in_range_vec_static,
                          n_out_range1_vec_static, n_out_range2_vec_static) ;
-    prepareUpdateInputs( particlesPreMerge.maps_dynamic,
-                         dev_poses, n_particles, n_measure,
-                         dev_maps_inrange_dynamic, dev_map_offsets_dynamic,
-                         dev_maps_updated_dynamic, dev_merged_flags_dynamic,
-                         features_in_dynamic, features_out1_dynamic,
-                         features_out2_dynamic, n_in_range_vec_dynamic,
-                         n_out_range1_vec_dynamic,n_out_range2_vec_dynamic) ;
+    if(config.dynamicFeatures)
+    {
+        prepareUpdateInputs( particlesPreMerge.maps_dynamic,
+                             dev_poses, n_particles, n_measure,
+                             dev_maps_inrange_dynamic, dev_map_offsets_dynamic,
+                             dev_maps_updated_dynamic, dev_merged_flags_dynamic,
+                             features_in_dynamic, features_out1_dynamic,
+                             features_out2_dynamic, n_in_range_vec_dynamic,
+                             n_out_range1_vec_dynamic,n_out_range2_vec_dynamic) ;
+    }
 
     // allocate arrays for particle weight update
     CUDA_SAFE_CALL(
@@ -3751,37 +2959,54 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     int n_update_dynamic = features_in_dynamic.size()*(n_measure+1)
             + n_measure*n_particles ;
 
-    DEBUG_MSG("launching phdUpdateKernelMixed") ;
     cudaPrintfInit(4194304) ;
-    phdUpdateKernelMixed<<<nBlocks,256>>>(
-        dev_poses, dev_maps_inrange_static, dev_maps_inrange_dynamic,
-        dev_map_offsets_static, dev_map_offsets_dynamic,
-        n_particles,n_measure,
-        dev_maps_updated_static, dev_maps_updated_dynamic,
-        dev_merged_flags_static, dev_merged_flags_dynamic,
-        dev_particle_weights);
-    CUDA_SAFE_THREAD_SYNC() ;
+    if(config.dynamicFeatures)
+    {
+        DEBUG_MSG("launching phdUpdateKernelMixed") ;
+        phdUpdateKernelMixed<<<nBlocks,256>>>(
+            dev_poses, dev_maps_inrange_static, dev_maps_inrange_dynamic,
+            dev_map_offsets_static, dev_map_offsets_dynamic,
+            n_particles,n_measure,
+            dev_maps_updated_static, dev_maps_updated_dynamic,
+            dev_merged_flags_static, dev_merged_flags_dynamic,
+            dev_particle_weights);
+        CUDA_SAFE_THREAD_SYNC() ;
+        CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_dynamic ) ) ;
+        CUDA_SAFE_CALL( cudaFree( dev_map_offsets_dynamic ) ) ;
+    }
+    else
+    {
+        DEBUG_MSG("launching phdUpdateKernelStatic") ;
+        phdUpdateKernelStatic<<<nBlocks,256>>>(
+            dev_poses, dev_maps_inrange_static,dev_map_offsets_static,
+            n_particles,n_measure,dev_maps_updated_static,
+            dev_merged_flags_static,dev_particle_weights) ;
+        CUDA_SAFE_THREAD_SYNC() ;
+    }
     cudaPrintfDisplay(stdout,false) ;
     cudaPrintfEnd();
 
-    CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_static ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_dynamic ) ) ;
+    CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_static ) ) ; 
+    CUDA_SAFE_CALL( cudaFree( dev_map_offsets_static ) ) ;
 
-//    // check input weights against merge flags
-//    cout << "DEBUG merged flags" << endl ;
-//    bool* merged_flags = (bool*)malloc(n_update_static*sizeof(bool)) ;
-//    Gaussian2D* maps_updated = (Gaussian2D*)malloc( n_update_static*sizeof(Gaussian2D) ) ;
-//    cudaMemcpy( merged_flags, dev_merged_flags_static, n_update_static*sizeof(bool),cudaMemcpyDeviceToHost) ;
-//    CUDA_SAFE_CALL(
-//                cudaMemcpy( maps_updated, dev_maps_updated_static,
-//                            n_update_static*sizeof(Gaussian2D),
-//                            cudaMemcpyDeviceToHost ) ) ;
+
+    // check input weights against merge flags
+    cout << "DEBUG first updated feature" << endl ;
+    bool* merged_flags = (bool*)malloc(n_update_static*sizeof(bool)) ;
+    Gaussian2D* maps_updated = (Gaussian2D*)malloc( n_update_static*sizeof(Gaussian2D) ) ;
+    cudaMemcpy( merged_flags, dev_merged_flags_static, n_update_static*sizeof(bool),cudaMemcpyDeviceToHost) ;
+    CUDA_SAFE_CALL(
+                cudaMemcpy( maps_updated, dev_maps_updated_static,
+                            n_update_static*sizeof(Gaussian2D),
+                            cudaMemcpyDeviceToHost ) ) ;
 //    for (int j = 0 ; j < n_update_static ; j++)
 //    {
 //        cout << "(" << maps_updated[j].weight << " | " << merged_flags[j] << ")" << endl ;
 //    }
-//    free(maps_updated) ;
-//    free(merged_flags) ;
+    print_feature(maps_updated[0]) ;
+    print_feature(maps_updated[1]) ;
+    free(maps_updated) ;
+    free(merged_flags) ;
 
 
     /******************************************************
@@ -3796,12 +3021,15 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                       n_out_range2_vec_static, n_particles,
                       n_measure,n_update_static, particles.maps_static ) ;
 
-    mergeAndCopyMaps( dev_maps_updated_dynamic,dev_merged_flags_dynamic,
-                      features_out1_dynamic,
-                      features_out2_dynamic, n_in_range_vec_dynamic,
-                      n_out_range1_vec_dynamic,
-                      n_out_range2_vec_dynamic, n_particles,
-                      n_measure,n_update_dynamic,particles.maps_dynamic ) ;
+    if(config.dynamicFeatures)
+    {
+        mergeAndCopyMaps( dev_maps_updated_dynamic,dev_merged_flags_dynamic,
+                          features_out1_dynamic,
+                          features_out2_dynamic, n_in_range_vec_dynamic,
+                          n_out_range1_vec_dynamic,
+                          n_out_range2_vec_dynamic, n_particles,
+                          n_measure,n_update_dynamic,particles.maps_dynamic ) ;
+    }
 
 
     /**********************************************************
@@ -3851,6 +3079,7 @@ ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
 //	DEBUG_VAL(interval) ;
     for ( int j = 0 ; j < n_new_particles ; j++ )
     {
+        r = j*interval + randu01()*interval ;
         while( r > c )
         {
             i++ ;
@@ -3886,7 +3115,7 @@ ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
         newParticles.maps_dynamic[j] = oldParticles.maps_dynamic[i] ;
         newParticles.cardinalities[j] = oldParticles.cardinalities[i] ;
         idx_resample[j] = i ;
-        r += interval ;
+//        r += interval ;
     }
     newParticles.resample_idx = idx_resample ;
     return newParticles ;
