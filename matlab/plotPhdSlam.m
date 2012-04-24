@@ -18,13 +18,13 @@ nSteps = 0 ;
 
 % read the backup of the config file to see if the features are dynamic or
 % static
-config_file = fileread([path,filesep,'config.cfg']) ;
-expr = 'dynamic_features\s*=\s*(?<dynamic>\d)' ;
-matches = regexp(config_file,expr,'names') ;
-is_dynamic = strcmp(matches.dynamic,'1') ;
+% config_file = fileread([path,filesep,'config.cfg']) ;
+% expr = 'feature_model\s*=\s*(?<dynamic>\d)' ;
+% matches = regexp(config_file,expr,'names') ;
+% is_dynamic = strcmp(matches.dynamic,'1') ;
 
 disp 'reading log files...'
-listing = dir([path,filesep,'particles*']) ;
+listing = dir([path,filesep,'particles0*']) ;
 listing2 = dir([path,filesep,'state_estimate*']) ;
 nSteps = length(listing) + length(listing2) ;
 nParticles = -1 ;
@@ -36,6 +36,8 @@ covs_dynamic = cell(nSteps,1) ;
 weights_dynamic = cell(nSteps,1) ;
 expectedTraj = zeros(6,nSteps) ;
 estimatedCn = cell(nSteps,1) ;
+particlePoses = cell(nSteps,1) ;
+particleWeights = cell(nSteps,1) ;
 particleWeights = [] ;
 % nSteps = 400 ;
 for i = 1:nSteps
@@ -46,12 +48,12 @@ for i = 1:nSteps
     %     disp( particleFilename )
         load(matfilename) ;
         
-        % allocate space for results on first run
-        if nParticles < 0
-            nParticles = length(particles.weights) ;
-            particleWeights = zeros(nSteps, nParticles) ;
-            particlePoses = zeros( 6, nParticles, nSteps ) ;
-        end
+%         % allocate space for results on first run
+%         if nParticles < 0
+%             nParticles = length(particles.weights) ;
+%             particleWeights = zeros(nSteps, nParticles) ;
+%             particlePoses = zeros( 6, nParticles, nSteps ) ;
+%         end
         
         particle_weights = particles.weights ;
         particle_poses = particles.states ;
@@ -70,9 +72,8 @@ for i = 1:nSteps
         means_dynamic{i} = particles.maps_dynamic(idx_max).means ;
         covs_dynamic{i} = particles.maps_dynamic(idx_max).covs ;
         
-        particlePoses(:,:,i) = particle_poses ;
-        particleWeights(i,:) = particle_weights ;
-%         clear 'paricles'
+        particlePoses{i} = particle_poses ;
+        particleWeights{i} = particle_weights ;
     elseif exist(txtfilename,'file')
         fid=fopen(txtfilename) ;
         
@@ -145,8 +146,7 @@ end
 
 %% plot
 close all
-
-
+nParticles = numel(particleWeights{end}) ;
 min_weight = 0.25 ;
 figure(1)
 set(gcf,'Position',[100,100,800,600]) ;
@@ -161,10 +161,12 @@ draw_rate = 1 ;
 avi_frames = struct(getframe(gcf)) ;
 avi_frames = repmat(avi_frames,1,ceil(nSteps/draw_rate)) ;
 frame_counter = 1 ;
+pos_error = zeros(1,nSteps/draw_rate) ;
+yaw_error = zeros(1,nSteps/draw_rate) ;
 for i = 1:draw_rate:nSteps
     set(0,'CurrentFigure',1) ;
-    weights = exp(particleWeights(i,:)) ;
-    poses = particlePoses(:,:,i) ;
+    weights = exp(particleWeights{i}) ;
+    poses = particlePoses{i} ;
     if size(poses,1) == 1
         poses = poses' ;
     end
@@ -179,6 +181,7 @@ for i = 1:draw_rate:nSteps
         weight_sum = numel(idx) ;
     end
     idx = idx(1:round(weight_sum)) ;
+    idx = idx(2:end) ;
 %     idx = mapWeights > min_weight ;
     pp = make_cov_ellipses( mapMeans(1:2,idx)', mapCovs(1:2,1:2,idx), N ) ;
 %     ppGold = makeCovEllipses( expectedMapsGold(i).means,
@@ -195,10 +198,8 @@ for i = 1:draw_rate:nSteps
         weight_sum = numel(idx) ;
     end
     idx = idx(1:round(weight_sum)) ;
-%     idx = mapWeights > min_weight ;
+    idx = mapWeights > min_weight ;
     pp_dynamic = make_cov_ellipses( mapMeans(1:2,idx)', mapCovs(1:2,1:2,idx), N ) ;
-%     ppGold = makeCovEllipses( expectedMapsGold(i).means,
-%     expectedMapsGold(i).covs,N ) ;
 
     clf 
     subplot(2,4,[1,2,5,6])
@@ -283,20 +284,32 @@ for i = 1:draw_rate:nSteps
     title(num2str(n_eff))
     
     subplot(2,4,[7,8])
-    cn = estimatedCn{i} ;
-    plot(0:numel(cn)-1,exp(cn),'.') ;
-    ylim([0,1]) ;
+%     cn = estimatedCn{i} ;
+%     plot(0:numel(cn)-1,exp(cn),'.') ;
+%     ylim([0,1]) ;
+    pos_error_i = norm(expectedTraj(1:2,i)-sim.traj(1:2,i)) ;
+    yaw_error_i = wrapAngle(expectedTraj(3,i)-sim.traj(3,i)) ;
+    pos_error(i/draw_rate) = pos_error_i ;
+    yaw_error(i/draw_rate) = yaw_error_i ;
+    plot(1:draw_rate:i,pos_error(1:i/draw_rate),'linewidth',2) ;
+    hold on
+    plot(1:draw_rate:i,yaw_error(1:i/draw_rate),'r','linewidth',2) ;
+    xlim([0,nSteps])
+    ylim([0,5])
+    ylabel('Vehicle Error')
+    xlabel('Time step')
     title(['Cardinality, weightsum = ',num2str(cn_est)])
+%     pause
     drawnow
     avi_frames(frame_counter) = getframe(gcf) ;
     frame_counter = frame_counter + 1 ;
 %     keyboard
 end
-%%
-disp('Creating AVI')
-avi = avifile('scphd_mixed_targets_mixed_models.avi') ;
-for i = 1:numel(avi_frames)
-    disp([num2str(i),'/',num2str(numel(avi_frames))])
-    avi = addframe( avi,avi_frames(i) ) ;
-end
-avi = close(avi) ;
+% %%
+% disp('Creating AVI')
+% avi = avifile('scphd_mixed_targets_mixed_models.avi') ;
+% for i = 1:numel(avi_frames)
+%     disp([num2str(i),'/',num2str(numel(avi_frames))])
+%     avi = addframe( avi,avi_frames(i) ) ;
+% end
+% avi = close(avi) ;

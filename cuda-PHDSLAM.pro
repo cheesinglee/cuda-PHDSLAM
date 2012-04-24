@@ -6,13 +6,15 @@
 SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
+    src/slamplot.cpp
 
 HEADERS += \
     src/slamparams.h \
     src/slamtypes.h \
     src/rng.h \
     src/device_math.cuh \
-    src/phdfilter.h
+    src/phdfilter.h \
+    src/slamplot.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -50,6 +52,10 @@ LIBS += -lboost_program_options -lboost_random
 #### FFTW libraries ######################################################
 # needs to be statically linked to avoid conflicts with the MATLAB libs
 LIBS += -lfftw3 -lm
+##########################################################################
+
+#### CImg libraries ######################################################
+LIBS += -lX11 -lpthread
 ##########################################################################
 
 

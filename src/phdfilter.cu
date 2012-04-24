@@ -199,9 +199,6 @@ __device__ void
 computeBirth( ConstantVelocityState pose, RangeBearingMeasurement z,
               Gaussian2D& feature_birth)
 {
-    // set birth weight
-    feature_birth.weight = safeLog(dev_config.birthWeight) ;
-
     // invert measurement
     REAL theta = pose.ptheta + z.bearing ;
     REAL dx = z.range*cos(theta) ;
@@ -230,6 +227,11 @@ computeBirth( ConstantVelocityState pose, RangeBearingMeasurement z,
     feature_birth.cov[3] = pow(J[1],2)*var_range +
             pow(J[3],2)*var_bearing ;
 
+    // set birth weight
+    if(z.label==STATIC_MEASUREMENT)
+        feature_birth.weight = safeLog(dev_config.birthWeight) ;
+    else
+        feature_birth.weight = safeLog(0) ;
 }
 
 __device__ void
@@ -283,7 +285,10 @@ computeBirth( ConstantVelocityState pose, RangeBearingMeasurement z,
     feature_birth.cov[14] = 0 ;
 
     // set birth weight
-    feature_birth.weight = safeLog(dev_config.birthWeight) ;
+    if (z.label == DYNAMIC_MEASUREMENT)
+        feature_birth.weight = safeLog(dev_config.birthWeight) ;
+    else
+        feature_birth.weight = safeLog(0) ;
 }
 
 __device__ void
@@ -356,22 +361,29 @@ computePreUpdate( ConstantVelocityState pose, Gaussian2D feature_predict,
     for ( int m = 0 ; m < n_measure ; m++ )
     {
         int idx = m*n_features ;
-        innov[0] = Z[m].range - r ;
-        innov[1] = wrapAngle(Z[m].bearing - bearing) ;
-        features_update[idx].mean[0] = feature_predict.mean[0] + K[0]*innov[0] + K[2]*innov[1] ;
-        features_update[idx].mean[1] = feature_predict.mean[1] + K[1]*innov[0] + K[3]*innov[1] ;
-        for ( int i = 0 ; i < 4 ; i++ )
-            features_update[idx].cov[i] = cov_update[i] ;
-        // compute single object likelihood
-        dist = innov[0]*innov[0]*S[0] +
-                innov[0]*innov[1]*(S[1] + S[2]) +
-                innov[1]*innov[1]*S[3] ;
-        // partially update weight (log-transformed)
-        features_update[idx].weight = safeLog(feature_pd)
-                + safeLog(feature_predict.weight)
-                - 0.5*dist
-                - safeLog(2*M_PI)
-                - 0.5*safeLog(det_sigma) ;
+        if(Z[m].label==STATIC_MEASUREMENT)
+        {
+            innov[0] = Z[m].range - r ;
+            innov[1] = wrapAngle(Z[m].bearing - bearing) ;
+            features_update[idx].mean[0] = feature_predict.mean[0] + K[0]*innov[0] + K[2]*innov[1] ;
+            features_update[idx].mean[1] = feature_predict.mean[1] + K[1]*innov[0] + K[3]*innov[1] ;
+            for ( int i = 0 ; i < 4 ; i++ )
+                features_update[idx].cov[i] = cov_update[i] ;
+            // compute single object likelihood
+            dist = innov[0]*innov[0]*S[0] +
+                    innov[0]*innov[1]*(S[1] + S[2]) +
+                    innov[1]*innov[1]*S[3] ;
+            // partially update weight (log-transformed)
+            features_update[idx].weight = safeLog(feature_pd)
+                    + safeLog(feature_predict.weight)
+                    - 0.5*dist
+                    - safeLog(2*M_PI)
+                    - 0.5*safeLog(det_sigma) ;
+        }
+        else
+        {
+            features_update[idx].weight = safeLog(0) ;
+        }
     }
 }
 
@@ -472,24 +484,31 @@ computePreUpdate( ConstantVelocityState pose, Gaussian4D feature_predict,
     for ( int m = 0 ; m < n_measure ; m++ )
     {
         int idx = m*n_features ;
-        innov[0] = Z[m].range - r ;
-        innov[1] = wrapAngle(Z[m].bearing - bearing) ;
-        features_update[idx].mean[0] = feature_predict.mean[0] + K[0]*innov[0] + K[4]*innov[1] ;
-        features_update[idx].mean[1] = feature_predict.mean[1] + K[1]*innov[0] + K[5]*innov[1] ;
-        features_update[idx].mean[2] = feature_predict.mean[2] + K[2]*innov[0] + K[6]*innov[1] ;
-        features_update[idx].mean[3] = feature_predict.mean[3] + K[3]*innov[0] + K[7]*innov[1] ;
-        for ( int i = 0 ; i < 16 ; i++ )
-            features_update[idx].cov[i] = cov_update[i] ;
-        // compute single object likelihood
-        dist = innov[0]*innov[0]*S[0] +
-                innov[0]*innov[1]*(S[1] + S[2]) +
-                innov[1]*innov[1]*S[3] ;
-        // partially update weight (log-transformed)
-        features_update[idx].weight = safeLog(feature_pd)
-                + safeLog(feature_predict.weight)
-                - 0.5*dist
-                - safeLog(2*M_PI)
-                - 0.5*safeLog(det_sigma) ;
+        if(Z[m].label==DYNAMIC_MEASUREMENT)
+        {
+            innov[0] = Z[m].range - r ;
+            innov[1] = wrapAngle(Z[m].bearing - bearing) ;
+            features_update[idx].mean[0] = feature_predict.mean[0] + K[0]*innov[0] + K[4]*innov[1] ;
+            features_update[idx].mean[1] = feature_predict.mean[1] + K[1]*innov[0] + K[5]*innov[1] ;
+            features_update[idx].mean[2] = feature_predict.mean[2] + K[2]*innov[0] + K[6]*innov[1] ;
+            features_update[idx].mean[3] = feature_predict.mean[3] + K[3]*innov[0] + K[7]*innov[1] ;
+            for ( int i = 0 ; i < 16 ; i++ )
+                features_update[idx].cov[i] = cov_update[i] ;
+            // compute single object likelihood
+            dist = innov[0]*innov[0]*S[0] +
+                    innov[0]*innov[1]*(S[1] + S[2]) +
+                    innov[1]*innov[1]*S[3] ;
+            // partially update weight (log-transformed)
+            features_update[idx].weight = safeLog(feature_pd)
+                    + safeLog(feature_predict.weight)
+                    - 0.5*dist
+                    - safeLog(2*M_PI)
+                    - 0.5*safeLog(det_sigma) ;
+        }
+        else
+        {
+            features_update[idx].weight = safeLog(0) ;
+        }
     }
 }
 
@@ -894,11 +913,33 @@ predictMapKernelMixed(Gaussian4D* features_prior,
             REAL vx = features_prior[idx].mean[2] ;
             REAL vy = features_prior[idx].mean[3] ;
             REAL v_mag = sqrt(vx*vx + vy*vy) ;
-            REAL p_jmm = 1/(1+exp(dev_config.beta*(dev_config.tau - v_mag))) ;
+            REAL sigmoid_v = 1/(1+exp(dev_config.beta*(dev_config.tau - v_mag))) ;
+            REAL p_jmm ;
+            REAL ps ;
+            REAL scale_x = 1 ;
+            REAL scale_y = 1 ;
+            if (dev_config.featureModel==DYNAMIC_MODEL)
+            {
+                p_jmm = 1 ;
+                ps = logistic_function(v_mag,0,1-dev_config.ps,dev_config.beta,
+                                       dev_config.tau) ;
+                ps = 1-ps ;
+                scale_x = logistic_function(vx,0,1,dev_config.beta,
+                                            dev_config.tau) ;
+                scale_y = logistic_function(vy,0,1,dev_config.beta,
+                                            dev_config.tau) ;
+            }
+            else if(dev_config.featureModel==MIXED_MODEL)
+            {
+                p_jmm = sigmoid_v ;
+                ps = dev_config.ps ;
+                p_jmm = 1 ;
+            }
             features_predict[idx] = model.compute_prediction(features_prior[idx],
-                                                             dev_config.dt) ;
-            features_predict[idx].weight = p_jmm
-                    *dev_config.ps*features_predict[idx].weight ;
+                                                             dev_config.dt,
+                                                             scale_x,scale_y) ;
+            features_predict[idx].weight = p_jmm*ps
+                    *features_predict[idx].weight ;
 
             features_jump[idx].weight = (1-p_jmm)*features_prior[idx].weight ;
             features_jump[idx].mean[0] = features_prior[idx].mean[0] ;
@@ -960,9 +1001,12 @@ predictMapMixed(ParticleSLAM& particles)
     for ( int n = 0 ; n < particles.n_particles ; n++ )
     {
         particles.maps_dynamic[n].assign(begin,end) ;
-        particles.maps_static[n].insert(particles.maps_static[n].end(),
-                                        begin_jump,
-                                        end_jump ) ;
+        if(config.featureModel==MIXED_MODEL)
+        {
+            particles.maps_static[n].insert(particles.maps_static[n].end(),
+                                            begin_jump,
+                                            end_jump ) ;
+        }
         if ( n < particles.n_particles - 1)
         {
             begin = end ;
@@ -972,16 +1016,6 @@ predictMapMixed(ParticleSLAM& particles)
             end_jump += particles.maps_dynamic[n+1].size() ;
         }
     }
-
-    cout << "first predicted static feature" << endl ;
-    Gaussian2D feature_test = particles.maps_static[0][0] ;
-    cout << feature_test.weight << " "
-         << feature_test.mean[0] << " " << feature_test.mean[1] << " "
-         << feature_test.cov[0] << " " << feature_test.cov[1] << " "
-         << feature_test.cov[2] << " " << feature_test.cov[3] << endl ;
-
-    cout << "first predicted dynamic feature: " << endl ;
-    print_feature(particles.maps_dynamic[0][0]) ;
 
     // free memory
     CUDA_SAFE_CALL( cudaFree( dev_features_prior ) ) ;
@@ -1174,7 +1208,7 @@ phdPredict(ParticleSLAM& particles, ... )
     }
 
     // map prediction
-    if(config.dynamicFeatures)
+    if(config.featureModel==DYNAMIC_MODEL || config.featureModel==MIXED_MODEL)
         predictMapMixed(particles) ;
 
     // log time
@@ -1840,14 +1874,15 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
         track of which features have already be merged.
     \param particleWeights New particle weights after PHD update
   */
+template <class GaussianType>
 __global__ void
-phdUpdateKernelStatic(ConstantVelocityState* poses,
-                      Gaussian2D* features_predict,
-                      int* map_offsets,
-                      int n_particles, int n_measure,
-                      Gaussian2D* features_update,
-                      bool* merge_flags,
-                      REAL* particle_weights)
+phdUpdateKernel(ConstantVelocityState* poses,
+                GaussianType* features_predict,
+                int* map_offsets,
+                int n_particles, int n_measure,
+                GaussianType* features_update,
+                bool* merge_flags,
+                REAL* particle_weights)
 {
     // shared memory variables
     __shared__ REAL sdata[256] ;
@@ -1867,7 +1902,7 @@ phdUpdateKernelStatic(ConstantVelocityState* poses,
     int tid = threadIdx.x ;
     // pre-update variables
     REAL featurePd = 0 ;
-    Gaussian2D feature ;
+    GaussianType feature ;
 
     // update variables
     REAL w_partial = 0 ;
@@ -1901,9 +1936,9 @@ phdUpdateKernelStatic(ConstantVelocityState* poses,
                     // get the feature corresponding to the current thread
                     feature = features_predict[predict_offset+feature_idx] ;
 
-                    Gaussian2D* ptr_nondetect = features_update+update_offset
+                    GaussianType* ptr_nondetect = features_update+update_offset
                             + feature_idx ;
-                    Gaussian2D* ptr_update = ptr_nondetect + n_features ;
+                    GaussianType* ptr_update = ptr_nondetect + n_features ;
                     computePreUpdate(pose,feature,n_features,n_measure,
                                      featurePd,*ptr_nondetect,
                                      ptr_update);
@@ -1916,7 +1951,7 @@ phdUpdateKernelStatic(ConstantVelocityState* poses,
                     // find measurement corresponding to current thread
                     int z_idx = feature_idx - n_features ;
 
-                    Gaussian2D* ptr_birth = features_update +
+                    GaussianType* ptr_birth = features_update +
                             update_offset + n_features
                             + n_measure*n_features + z_idx ;
                     computeBirth(pose,Z[z_idx],*ptr_birth);
@@ -1952,7 +1987,7 @@ phdUpdateKernelStatic(ConstantVelocityState* poses,
                 REAL log_normalizer = 0 ;
                 REAL val = 0 ;
                 REAL sum = 0 ;
-                Gaussian2D* ptr_update = features_update
+                GaussianType* ptr_update = features_update
                         + update_offset + n_features + i*n_features ;
 //                cuPrintf("%f\n",features_update[0].weight) ;
                 if (n_features > 0)
@@ -2220,7 +2255,7 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                     normalizer += sdata[0] ;
                 }
                 normalizer += dev_config.clutterDensity
-                        + 2*dev_config.birthWeight ;
+                        + dev_config.birthWeight ;
                 normalizer = safeLog(normalizer) ;
 
                 // loop through features corresponding to current measurement,
@@ -2928,14 +2963,19 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
                            cudaMemcpyHostToDevice) ) ;
 
     // extract in-range portions of maps, and allocate output arrays
-    prepareUpdateInputs( particlesPreMerge.maps_static,
-                         dev_poses, n_particles, n_measure,
-                         dev_maps_inrange_static, dev_map_offsets_static,
-                         dev_maps_updated_static, dev_merged_flags_static,
-                         features_in_static, features_out1_static,
-                         features_out2_static, n_in_range_vec_static,
-                         n_out_range1_vec_static, n_out_range2_vec_static) ;
-    if(config.dynamicFeatures)
+    if(config.featureModel==STATIC_MODEL
+            || config.featureModel==MIXED_MODEL)
+    {
+        prepareUpdateInputs( particlesPreMerge.maps_static,
+                             dev_poses, n_particles, n_measure,
+                             dev_maps_inrange_static, dev_map_offsets_static,
+                             dev_maps_updated_static, dev_merged_flags_static,
+                             features_in_static, features_out1_static,
+                             features_out2_static, n_in_range_vec_static,
+                             n_out_range1_vec_static, n_out_range2_vec_static) ;
+    }
+    if(config.featureModel == DYNAMIC_MODEL
+            || config.featureModel == MIXED_MODEL)
     {
         prepareUpdateInputs( particlesPreMerge.maps_dynamic,
                              dev_poses, n_particles, n_measure,
@@ -2960,7 +3000,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
             + n_measure*n_particles ;
 
     cudaPrintfInit(4194304) ;
-    if(config.dynamicFeatures)
+    if(config.featureModel == MIXED_MODEL)
     {
         DEBUG_MSG("launching phdUpdateKernelMixed") ;
         phdUpdateKernelMixed<<<nBlocks,256>>>(
@@ -2974,13 +3014,22 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
         CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_dynamic ) ) ;
         CUDA_SAFE_CALL( cudaFree( dev_map_offsets_dynamic ) ) ;
     }
-    else
+    else if(config.featureModel==STATIC_MODEL)
     {
-        DEBUG_MSG("launching phdUpdateKernelStatic") ;
-        phdUpdateKernelStatic<<<nBlocks,256>>>(
+        DEBUG_MSG("launching phdUpdateKernel Static") ;
+        phdUpdateKernel<<<nBlocks,256>>>(
             dev_poses, dev_maps_inrange_static,dev_map_offsets_static,
             n_particles,n_measure,dev_maps_updated_static,
             dev_merged_flags_static,dev_particle_weights) ;
+        CUDA_SAFE_THREAD_SYNC() ;
+    }
+    else if(config.featureModel==DYNAMIC_MODEL)
+    {
+        DEBUG_MSG("launching phdUpdateKernel Dynamic") ;
+        phdUpdateKernel<<<nBlocks,256>>>(
+            dev_poses, dev_maps_inrange_dynamic,dev_map_offsets_dynamic,
+            n_particles,n_measure,dev_maps_updated_dynamic,
+            dev_merged_flags_dynamic,dev_particle_weights) ;
         CUDA_SAFE_THREAD_SYNC() ;
     }
     cudaPrintfDisplay(stdout,false) ;
@@ -2990,23 +3039,23 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     CUDA_SAFE_CALL( cudaFree( dev_map_offsets_static ) ) ;
 
 
-    // check input weights against merge flags
-    cout << "DEBUG first updated feature" << endl ;
-    bool* merged_flags = (bool*)malloc(n_update_static*sizeof(bool)) ;
-    Gaussian2D* maps_updated = (Gaussian2D*)malloc( n_update_static*sizeof(Gaussian2D) ) ;
-    cudaMemcpy( merged_flags, dev_merged_flags_static, n_update_static*sizeof(bool),cudaMemcpyDeviceToHost) ;
-    CUDA_SAFE_CALL(
-                cudaMemcpy( maps_updated, dev_maps_updated_static,
-                            n_update_static*sizeof(Gaussian2D),
-                            cudaMemcpyDeviceToHost ) ) ;
+//    // check input weights against merge flags
+//    cout << "DEBUG first updated feature" << endl ;
+//    bool* merged_flags = (bool*)malloc(n_update_static*sizeof(bool)) ;
+//    Gaussian2D* maps_updated = (Gaussian2D*)malloc( n_update_static*sizeof(Gaussian2D) ) ;
+//    cudaMemcpy( merged_flags, dev_merged_flags_static, n_update_static*sizeof(bool),cudaMemcpyDeviceToHost) ;
+//    CUDA_SAFE_CALL(
+//                cudaMemcpy( maps_updated, dev_maps_updated_static,
+//                            n_update_static*sizeof(Gaussian2D),
+//                            cudaMemcpyDeviceToHost ) ) ;
 //    for (int j = 0 ; j < n_update_static ; j++)
 //    {
 //        cout << "(" << maps_updated[j].weight << " | " << merged_flags[j] << ")" << endl ;
 //    }
-    print_feature(maps_updated[0]) ;
-    print_feature(maps_updated[1]) ;
-    free(maps_updated) ;
-    free(merged_flags) ;
+//    print_feature(maps_updated[0]) ;
+//    print_feature(maps_updated[1]) ;
+//    free(maps_updated) ;
+//    free(merged_flags) ;
 
 
     /******************************************************
@@ -3014,14 +3063,17 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
      * Merge updated maps and copy back to host
      *
      ******************************************************/
-    mergeAndCopyMaps( dev_maps_updated_static,dev_merged_flags_static,
-                      features_out1_static,
-                      features_out2_static, n_in_range_vec_static,
-                      n_out_range1_vec_static,
-                      n_out_range2_vec_static, n_particles,
-                      n_measure,n_update_static, particles.maps_static ) ;
+    if(config.featureModel==STATIC_MODEL || config.featureModel==MIXED_MODEL)
+    {
+        mergeAndCopyMaps( dev_maps_updated_static,dev_merged_flags_static,
+                          features_out1_static,
+                          features_out2_static, n_in_range_vec_static,
+                          n_out_range1_vec_static,
+                          n_out_range2_vec_static, n_particles,
+                          n_measure,n_update_static, particles.maps_static ) ;
+    }
 
-    if(config.dynamicFeatures)
+    if(config.featureModel==DYNAMIC_MODEL || config.featureModel==MIXED_MODEL)
     {
         mergeAndCopyMaps( dev_maps_updated_dynamic,dev_merged_flags_dynamic,
                           features_out1_dynamic,
@@ -3185,8 +3237,9 @@ vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
                                     total_features*sizeof(bool),
                                     cudaMemcpyHostToDevice)) ;
         // kernel launch
-        phdUpdateMergeKernel<<<n,256>>>( dev_maps_in, dev_maps_out, dev_merged_sizes,
-                                         dev_merged_flags, dev_map_sizes, n ) ;
+        phdUpdateMergeKernel<<<n,256>>>(
+            dev_maps_in, dev_maps_out, dev_merged_sizes,
+            dev_merged_flags, dev_map_sizes, n ) ;
 
         CUDA_SAFE_CALL( cudaMemcpy( maps_out, dev_maps_out,
                                     total_features*sizeof(GaussianType),

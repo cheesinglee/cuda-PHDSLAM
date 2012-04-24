@@ -4,6 +4,14 @@
 #include "slamtypes.h"
 #include <float.h>
 
+/// evaluate generalized logistic function
+__device__ __host__ REAL
+logistic_function(REAL x, REAL lower, REAL upper, REAL beta, REAL tau)
+{
+    REAL y = (upper-lower)/(1+exp(-beta*(x-tau) ) ) ;
+    return y ;
+}
+
 /// invert a 2x2 matrix
 __device__ void
 invert_matrix2(REAL *A, REAL *A_inv)
@@ -408,7 +416,7 @@ typedef struct
     REAL std_accx ;
     REAL std_accy ;
     __device__ __host__ Gaussian4D
-    compute_prediction(Gaussian4D state_prior, REAL dt)
+    compute_prediction(Gaussian4D state_prior, REAL dt, REAL scale_x, REAL scale_y)
     {
         Gaussian4D state_predict ;
         // predicted weight
@@ -421,8 +429,8 @@ typedef struct
         state_predict.mean[3] = state_prior.mean[3] ;
 
         // predicted covariance
-        REAL var_x = pow(std_accx,2) ;
-        REAL var_y = pow(std_accy,2) ;
+        REAL var_x = pow(std_accx,2)*scale_x ;
+        REAL var_y = pow(std_accy,2)*scale_y ;
 
         state_predict.cov[0] = state_prior.cov[0] + state_prior.cov[8] * dt
                 + dt * (state_prior.cov[2] + state_prior.cov[10] * dt)
