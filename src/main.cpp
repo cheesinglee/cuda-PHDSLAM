@@ -30,6 +30,9 @@
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/type_traits/conditional.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/serialization/vector.hpp>
 
 //#define DEBUG
 
@@ -63,6 +66,56 @@ std::string measurements_time_filename ;
 std::string controls_time_filename ;
 
 char timestamp[80] ;
+
+template<class Archive>
+void serialize(Archive& ar, ConstantVelocityState& s, const unsigned int version)
+{
+    ar & s.px ;
+    ar & s.py ;
+    ar & s.ptheta ;
+    ar & s.vx ;
+    ar & s.vy ;
+    ar & s.vtheta ;
+}
+
+template<class Archive>
+void serialize(Archive& ar, RangeBearingMeasurement& z, const unsigned int version)
+{
+    ar & z.range ;
+    ar & z.bearing ;
+    ar & z.label ;
+}
+
+template<class Archive>
+void serialize(Archive& ar, Gaussian2D& g, const unsigned int version)
+{
+    ar & g.weight ;
+    ar & g.mean ;
+    ar & g.cov ;
+}
+
+template<class Archive>
+void serialize(Archive& ar, Gaussian4D& g, const unsigned int version)
+{
+    ar & g.weight ;
+    ar & g.mean ;
+    ar & g.cov ;
+}
+
+template<class Archive>
+void serialize(Archive& ar, ParticleSLAM& p, const unsigned int version)
+{
+    ar & p.cardinalities ;
+    ar & p.cardinality_birth ;
+    ar & p.maps_dynamic ;
+    ar & p.maps_static ;
+    ar & p.map_estimate_dynamic ;
+    ar & p.map_estimate_static ;
+    ar & p.n_particles ;
+    ar & p.resample_idx ;
+    ar & p.states ;
+    ar & p.weights ;
+}
 
 vector<REAL> loadTimestamps( string filename )
 {
@@ -115,14 +168,17 @@ measurementSet parseMeasurements(string line)
     stringstream ss(line, ios_base::in) ;
     measurementSet v ;
     REAL range, bearing ;
+    int label ;
     RangeBearingMeasurement *m ;
     while( ss.good() )
     {
         ss >> range ;
         ss >> bearing ;
+        ss >> label ;
         m = new RangeBearingMeasurement ;
         m->range = range ;
         m->bearing = bearing ;
+        m->label = label ;
         v.push_back(*m) ;
     }
     // TODO: sloppily remove the last invalid measurement (results from newline character?)
@@ -234,8 +290,20 @@ writeParticlesMat(ParticleSLAM particles, int t = -1,
         const char* mapFieldNames[] = {"weights","means","covs"} ;
         mxArray* maps_static = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
         mxArray* maps_dynamic = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
-        write_map_mat( particles.maps_static, maps_static ) ;
-        write_map_mat( particles.maps_dynamic, maps_dynamic ) ;
+        if(config.saveAllMaps)
+        {
+            write_map_mat( particles.maps_static, maps_static ) ;
+            write_map_mat( particles.maps_dynamic, maps_dynamic ) ;
+        }
+        else
+        {
+            vector<vector<Gaussian2D> > tmp_static_map_vector ;
+            vector<vector<Gaussian4D> > tmp_dynamic_map_vector ;
+            tmp_static_map_vector.push_back( particles.map_estimate_static ) ;
+            tmp_dynamic_map_vector.push_back( particles.map_estimate_dynamic ) ;
+            write_map_mat( tmp_static_map_vector, maps_static ) ;
+            write_map_mat( tmp_dynamic_map_vector, maps_dynamic ) ;
+        }
 
         // assemble final mat-file structure
 //        DEBUG_MSG("assemble mat-file") ;
@@ -666,7 +734,7 @@ void loadConfig(const char* filename)
             ("gate_births", value<bool>(&config.gateBirths)->default_value(true), "Enable measurement gating on births")
             ("gate_measurements", value<bool>(&config.gateMeasurements)->default_value(true), "Gate measurements for update")
             ("gate_threshold", value<REAL>(&config.gateThreshold)->default_value(10), "Mahalanobis distance threshold for gating")
-            ("dynamic_features", value<bool>(&config.dynamicFeatures)->default_value(false), "Use dynamic model for map features")
+            ("feature_model", value<int>(&config.featureModel)->default_value(0), "Feature motion model: 0-static, 1-CV, 2-static+CV")
             ("min_expected_feature_weight", value<REAL>(&config.minExpectedFeatureWeight)->default_value(0.33), "Minimum feature weight for expected map")
             ("min_separation", value<REAL>(&config.minSeparation)->default_value(5), "Minimum Mahalanobis separation between features")
             ("max_features", value<int>(&config.maxFeatures)->default_value(100), "Maximum number of features in map")
@@ -694,11 +762,14 @@ void loadConfig(const char* filename)
             ("cov_vy_birth", value<REAL>(&config.covVyBirth)->default_value(0), "Birth covariance of y velocity in dynamic targets")
             ("tau", value<REAL>(&config.tau)->default_value(0), "Velocity threshold for jump markov transition probability")
             ("beta", value<REAL>(&config.beta)->default_value(1), "Steepness of sigmoid function for computing JMM transition probability")
+            ("labeled_measurements", value<bool>(&config.labeledMeasurements)->default_value(false), "Use static/dynamic measurement labels for computing likelihood")
             ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
             ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
             ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
             ("controls_time_filename", value<std::string>(&controls_time_filename)->default_value(""), "Path to control timestamps datafile")
             ("max_time_steps", value<int>(&config.maxSteps)->default_value(10000), "Limit the number of time steps to execute")
+            ("save_all_maps", value<bool>(&config.saveAllMaps)->default_value(false), "Save all particle maps")
+            ("save_prediction", value<bool>(&config.savePrediction)->default_value(false), "Save the predicted state to the log files")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -717,14 +788,6 @@ void loadConfig(const char* filename)
             // compute clutter density
             config.clutterDensity = config.clutterRate
                     /( 2*config.maxBearing*config.maxRange ) ;
-
-//            variables_map::iterator it = vm.begin() ;
-//            while ( it != vm.end() )
-//            {
-//                cout << it->first << " = " << boost::lexical_cast<double>(it->second.value()) << endl ;
-//                it++ ;
-//            }
-
         }
         catch( std::exception& e )
         {
@@ -758,6 +821,8 @@ int main(int argc, char *argv[])
     config_filename = argv[1] ;
     loadConfig( config_filename.data() ) ;
     setDeviceConfig( config ) ;
+
+    bool profile_run = (argc > 2) ;
 
     // time variables
     time_t rawtime ;
@@ -860,6 +925,8 @@ int main(int argc, char *argv[])
     bool do_predict = false ;
     string logdirname(timestamp) ;
 
+    if(!profile_run)
+    {
     cout << "STARTING SIMULATION" << endl ;
     if ( config.filterType == CPHD_TYPE )
     {
@@ -931,16 +998,25 @@ int main(int argc, char *argv[])
                     phdPredict( particles, current_control ) ;
             }
         }
+        if(config.savePrediction)
+            writeParticlesMat(particles,n,"particles_predict");
 
         // need measurements from current time step for update
         if ( (ZZ.size() > 0) )
         {
+            if (n==100)
+            {
+                cout << "serializing state at n = 100" << endl ;
+                std::ofstream ofs("state100.bin") ;
+                boost::archive::binary_oarchive oa(ofs) ;
+                oa << particles ;
+                oa << ZZ ;
+            }
             cout << "Performing PHD Update" << endl ;
             particlesPreMerge = phdUpdate(particles, ZZ) ;
         }
         cout << "Extracting SLAM state" << endl ;
-        recoverSlamState(particles, expectedPose, expected_map_static,
-                         expected_map_dynamic, cn_estimate ) ;
+        recoverSlamState(particles, expectedPose, cn_estimate ) ;
 
 #ifdef DEBUG
         DEBUG_MSG( "Writing Log" ) ;
@@ -981,6 +1057,16 @@ int main(int argc, char *argv[])
                 break ;
         }
     }
+    }
+    else
+    {
+        std::ifstream ifs("state100.bin") ;
+        boost::archive::binary_iarchive ia(ifs) ;
+        ia >> particles ;
+        ia >> ZZ ;
+        phdUpdate(particles,ZZ) ;
+    }
+
 #ifdef DEBUG
     string command("mv *.mat ") ;
     command += logdirname ;

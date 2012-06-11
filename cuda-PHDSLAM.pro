@@ -14,7 +14,8 @@ HEADERS += \
     src/rng.h \
     src/device_math.cuh \
     src/phdfilter.h \
-    src/slamplot.h
+    src/slamplot.h \
+#    src/gaussian_mixture_reduction.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -46,7 +47,7 @@ INCLUDEPATH += $$MATLAB_PATH/extern/include
 ##############################################################################
 
 #### Boost libraries ###################################################
-LIBS += -lboost_program_options -lboost_random
+LIBS += -lboost_program_options -lboost_random -lboost_serialization
 ######################################################################
 
 #### FFTW libraries ######################################################

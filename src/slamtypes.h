@@ -23,6 +23,13 @@
 #define ACKERMAN_MOTION 1
 #define LOG0 -FLT_MAX
 
+#define STATIC_MODEL 0
+#define DYNAMIC_MODEL 1
+#define MIXED_MODEL 2
+
+#define STATIC_MEASUREMENT 0
+#define DYNAMIC_MEASUREMENT 1
+
 using namespace std ;
 
 //typedef struct {
@@ -72,6 +79,7 @@ class RangeBearingMeasurement {
 public:
     REAL range ;
     REAL bearing ;
+    int label ;
 } ;
 
 //// sensor properties structure
@@ -185,12 +193,13 @@ typedef struct{
     int filterType ;
     int distanceMetric ;
     int maxSteps ;
-    bool dynamicFeatures ;
+    int featureModel ;
 
     int motionType ;
     int mapEstimate ;
     int cphdDistType ;
     REAL nu ;
+    bool labeledMeasurements ;
 
     // ackerman steering stuff
     REAL l ;
@@ -199,6 +208,10 @@ typedef struct{
     REAL b ;
     REAL stdAlpha ;
     REAL stdEncoder ;
+
+    // state export configuration
+    bool saveAllMaps ;
+    bool savePrediction ;
 } SlamConfig ;
 
 //typedef vector<PoseParticle> ParticleVector ;
@@ -212,6 +225,8 @@ public:
     vector<ConstantVelocityState> states ;
     vector<vector<Gaussian2D> > maps_static ;
     vector<vector<Gaussian4D> > maps_dynamic ;
+    vector<Gaussian2D> map_estimate_static ;
+    vector<Gaussian4D> map_estimate_dynamic ;
     vector< vector<REAL> > cardinalities ;
     vector<REAL> cardinality_birth ;
     vector<int> resample_idx ;
@@ -223,6 +238,8 @@ public:
       states(n),
       maps_static(n),
       maps_dynamic(n),
+      map_estimate_static(),
+      map_estimate_dynamic(),
       resample_idx(n),
       cardinalities(n),
       cardinality_birth()
@@ -234,6 +251,8 @@ public:
         states = ps.states ;
         maps_static = ps.maps_static ;
         maps_dynamic = ps.maps_dynamic ;
+        map_estimate_static = ps.map_estimate_static ;
+        map_estimate_dynamic = ps.map_estimate_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
         resample_idx = ps.resample_idx ;
@@ -244,6 +263,8 @@ public:
         states = ps.states ;
         maps_static = ps.maps_static ;
         maps_dynamic = ps.maps_dynamic ;
+        map_estimate_static = ps.map_estimate_static ;
+        map_estimate_dynamic = ps.map_estimate_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
         resample_idx = ps.resample_idx ;

@@ -24,8 +24,7 @@ ParticleSLAM
 resampleParticles( ParticleSLAM oldParticles, int n_particles=-1 ) ;
 
 void
-recoverSlamState(ParticleSLAM particles, ConstantVelocityState& expectedPose,
-        vector<Gaussian2D>& expectedMap, vector<Gaussian4D>& expectedMapDynamic,
+recoverSlamState(ParticleSLAM& particles, ConstantVelocityState& expectedPose,
         vector<REAL>& cn_estimate ) ;
 
 void
