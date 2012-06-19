@@ -6,7 +6,8 @@
 SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
-    src/slamplot.cpp
+    src/slamplot.cpp \
+    src/disparity.cu
 
 HEADERS += \
     src/slamparams.h \
@@ -64,10 +65,12 @@ LIBS += -lX11 -lpthread
 
 # Cuda sources
 SOURCES -= \
-    src/phdfilter.cu
+    src/phdfilter.cu \
+    src/disparity.cu
 
 CUDA_SOURCES += \
-    src/phdfilter.cu
+    src/phdfilter.cu \
+    src/disparity.cu
 
 CUDA_LIBS = $$LIBS
 CUDA_LIBS -= -lboost_program_options

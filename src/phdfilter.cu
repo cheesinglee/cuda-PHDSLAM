@@ -2160,12 +2160,6 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
                                           *ptr_nondetect, ptr_update ) ;
                         val = feature_pd
                                 *features_predict_static[feature_idx].weight ;
-
-//                        if(feature_idx == 0)
-//                        {
-//                            cuPrintf("non-detect term: \n") ;
-//                            print_feature(*ptr_nondetect) ;
-//                        }
                     }
                     else if (feature_idx < n_features_static+n_measure)
                     {
@@ -3113,6 +3107,22 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     free(particle_weights) ;
     CUDA_SAFE_CALL( cudaFree( dev_poses ) ) ;
     return particlesPreMerge ;
+}
+
+SmcPhdSLAM
+phdUpdate(SmcPhdSLAM& slam, measurementSet measurements)
+{
+    SmcPhdStatic maps_static_concat ;
+    SmcPhdDynamic maps_dynamic_concat ;
+    vector<int> map_sizes_static ;
+    vector<int> map_sizes_dynamic ;
+    // count map sizes
+    int n_particles = slam.n_particles ;
+    for (int n = 0 ; n < n_particles ; n++ )
+    {
+        map_sizes_static.push_back(slam.maps_static[n].x.size());
+        map_sizes_dynamic.push_back(slam.maps_dynamic[n].x.size());
+    }
 }
 
 ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)

@@ -132,6 +132,14 @@ typedef struct {
 //} ParticleMixture ;
 
 typedef struct{
+    ConstantVelocityState pose ;
+    REAL fx ;
+    REAL fy ;
+    REAL u0 ;
+    REAL v0 ;
+} CameraState ;
+
+typedef struct{
     // initial state
     REAL x0 ;
     REAL y0 ;
@@ -255,6 +263,7 @@ public:
         map_estimate_dynamic = ps.map_estimate_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
+        cardinality_birth = ps.cardinality_birth ;
         resample_idx = ps.resample_idx ;
     }
     ParticleSLAM operator=(const ParticleSLAM ps)
@@ -267,23 +276,30 @@ public:
         map_estimate_dynamic = ps.map_estimate_dynamic ;
         weights = ps.weights ;
         cardinalities = ps.cardinalities ;
+        cardinality_birth = ps.cardinality_birth ;
         resample_idx = ps.resample_idx ;
         return *this ;
     }
 };
 
-//class FastSLAM:ParticleSLAM{
-//public:
-//    vector< vector<int> > assoc ;
-//    vector< MatrixX2d > likelihoods ;
+struct SmcPhdStatic{
+    vector<REAL> x ;
+    vector<REAL> y ;
+};
 
-//    FastSLAM( unsigned int n = 100)
-//        :
-//          assoc(n),
-//          likelihoods(n)
-//    {}
+struct SmcPhdDynamic:SmcPhdStatic{
+    vector<REAL> vx ;
+    vector<REAL> vy ;
+};
 
-//};
+class SmcPhdSLAM{
+public:
+    int n_particles ;
+    vector<REAL> weights ;
+    vector<ConstantVelocityState> particles ;
+    vector<SmcPhdStatic> maps_static ;
+    vector<SmcPhdDynamic> maps_dynamic ;
+};
 
 
 #endif /* SLAMTYPES_H_ */

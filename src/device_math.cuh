@@ -23,6 +23,22 @@ invert_matrix2(REAL *A, REAL *A_inv)
     A_inv[3] = A[0]/det ;
 }
 
+/// invert a 3x3 matrix
+__device__ void
+invert_matrix3(REAL *A, REAL* A_inv){
+    REAL det = A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5] -
+            A[0]*A[7]*A[5] - A[3]*A[1]*A[8] - A[6]*A[4]*A[2] ;
+    A_inv[0] = (A[4]*A[8] - A[7]*A[5])/det ;
+    A_inv[1] = (A[7]*A[2] - A[1]*A[8])/det ;
+    A_inv[2] = (A[1]*A[5] - A[4]*A[2])/det ;
+    A_inv[3] = (A[6]*A[5] - A[3]*A[8])/det ;
+    A_inv[4] = (A[0]*A[8] - A[6]*A[2])/det ;
+    A_inv[5] = (A[2]*A[3] - A[0]*A[5])/det ;
+    A_inv[6] = (A[3]*A[7] - A[6]*A[4])/det ;
+    A_inv[7] = (A[6]*A[1] - A[0]*A[7])/det ;
+    A_inv[8] = (A[0]*A[4] - A[3]*A[1])/det ;
+}
+
 /// determinant of a 4x4 matrix
 __device__ REAL
 det4(REAL *A)
@@ -200,6 +216,25 @@ computeMahalDist(Gaussian2D a, Gaussian2D b)
     dist = innov[0]*innov[0]*sigma_inv[0] +
             innov[0]*innov[1]*(sigma_inv[1]+sigma_inv[2]) +
             innov[1]*innov[1]*sigma_inv[3] ;
+    return dist ;
+}
+
+__device__ REAL
+computeMahalDist(Gaussian3D a, Gaussian3D b)
+{
+    REAL dist = 0 ;
+    REAL sigma_inv[9] ;
+    REAL sigma[9] ;
+    for (int i = 0 ; i <9 ; i++)
+        sigma[i] = (a.cov[i] + b.cov[i])/2 ;
+    invert_matrix2(sigma,sigma_inv);
+    REAL innov[3] ;
+    innov[0] = a.mean[0] - b.mean[0] ;
+    innov[1] = a.mean[1] - b.mean[1] ;
+    innov[2] = a.mean[1] - b.mean[1] ;
+    dist = innov[0]*(sigma_inv[0]*innov[0] + sigma_inv[3]*innov[1] + sigma_inv[6]*innov[2])
+            + innov[1]*(sigma_inv[1]*innov[0] + sigma_inv[4]*innov[1] + sigma_inv[7]*innov[2])
+            + innov[2]*(sigma_inv[2]*innov[0] + sigma_inv[5]*innov[1] + sigma_inv[8]*innov[2]) ;
     return dist ;
 }
 
