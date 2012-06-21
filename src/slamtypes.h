@@ -82,6 +82,11 @@ public:
     int label ;
 } ;
 
+typedef struct{
+    REAL u ;
+    REAL v ;
+} ImageMeasurement ;
+
 //// sensor properties structure
 //typedef struct{
 //	REAL maxRange ;
@@ -131,13 +136,6 @@ typedef struct {
 //	int n_particles ;
 //} ParticleMixture ;
 
-typedef struct{
-    ConstantVelocityState pose ;
-    REAL fx ;
-    REAL fy ;
-    REAL u0 ;
-    REAL v0 ;
-} CameraState ;
 
 typedef struct{
     // initial state
@@ -180,6 +178,16 @@ typedef struct{
     // jump markov parameters
     REAL tau ;
     REAL beta ;
+
+    // camera stuff
+    int particlesPerFeature ;
+    int imageWidth ;
+    int imageHeight ;
+    REAL stdU ;
+    REAL stdV ;
+    REAL disparityBirth ;
+    REAL stdDBirth ;
+
 
     int n_particles ;
     int nPredictParticles ;
@@ -231,56 +239,32 @@ public:
     int n_particles ;
     vector<double> weights ;
     vector<ConstantVelocityState> states ;
+    vector<int> resample_idx ;
+
+    ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n),
+      states(n) {}
+};
+
+class SynthSLAM : public ParticleSLAM{
+public:
     vector<vector<Gaussian2D> > maps_static ;
     vector<vector<Gaussian4D> > maps_dynamic ;
     vector<Gaussian2D> map_estimate_static ;
     vector<Gaussian4D> map_estimate_dynamic ;
     vector< vector<REAL> > cardinalities ;
     vector<REAL> cardinality_birth ;
-    vector<int> resample_idx ;
 
-    ParticleSLAM(unsigned int n = 100)
-    :
-      n_particles(n),
-      weights(n),
-      states(n),
-      maps_static(n),
-      maps_dynamic(n),
-      map_estimate_static(),
-      map_estimate_dynamic(),
-      resample_idx(n),
-      cardinalities(n),
-      cardinality_birth()
+    SynthSLAM(unsigned int n) : ParticleSLAM(n),
+        maps_static(n),
+        maps_dynamic(n),
+        map_estimate_static(),
+        map_estimate_dynamic(),
+        cardinalities(n),
+        cardinality_birth()
     {
-    }
-    ParticleSLAM(const ParticleSLAM &ps)
-    {
-        n_particles = ps.n_particles ;
-        states = ps.states ;
-        maps_static = ps.maps_static ;
-        maps_dynamic = ps.maps_dynamic ;
-        map_estimate_static = ps.map_estimate_static ;
-        map_estimate_dynamic = ps.map_estimate_dynamic ;
-        weights = ps.weights ;
-        cardinalities = ps.cardinalities ;
-        cardinality_birth = ps.cardinality_birth ;
-        resample_idx = ps.resample_idx ;
-    }
-    ParticleSLAM operator=(const ParticleSLAM ps)
-    {
-        n_particles = ps.n_particles ;
-        states = ps.states ;
-        maps_static = ps.maps_static ;
-        maps_dynamic = ps.maps_dynamic ;
-        map_estimate_static = ps.map_estimate_static ;
-        map_estimate_dynamic = ps.map_estimate_dynamic ;
-        weights = ps.weights ;
-        cardinalities = ps.cardinalities ;
-        cardinality_birth = ps.cardinality_birth ;
-        resample_idx = ps.resample_idx ;
-        return *this ;
     }
 };
+
 
 struct SmcPhdStatic{
     vector<REAL> x ;
@@ -301,5 +285,38 @@ public:
     vector<SmcPhdDynamic> maps_dynamic ;
 };
 
+
+
+typedef struct{
+    ConstantVelocityState pose ;
+    REAL fx ;
+    REAL fy ;
+    REAL u0 ;
+    REAL v0 ;
+} CameraState ;
+
+typedef struct{
+    vector<REAL> x ;
+    vector<REAL> y ;
+    vector<REAL> z ;
+    vector<REAL> weights ;
+} ParticleMap ;
+
+class DisparitySLAM : public ParticleSLAM{
+public:
+    vector<ParticleMap> maps ;
+    ParticleMap map_estimate ;
+    vector<CameraState> states ;
+
+    DisparitySLAM(CameraState initial, unsigned int n) : ParticleSLAM(n), maps(n), states(n,initial) {}
+};
+
+
+void
+disparityUpdate(DisparitySLAM& slam,
+                std::vector<ImageMeasurement> measurements) ;
+
+void
+disparityPredict(DisparitySLAM& slam) ;
 
 #endif /* SLAMTYPES_H_ */

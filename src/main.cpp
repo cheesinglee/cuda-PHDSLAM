@@ -24,6 +24,7 @@
 //#include "slamparams.h"
 #include "slamtypes.h"
 #include "phdfilter.h"
+#include "disparity.h"
 #include <cuda.h>
 #include <cutil_inline.h>
 
@@ -103,7 +104,7 @@ void serialize(Archive& ar, Gaussian4D& g, const unsigned int version)
 }
 
 template<class Archive>
-void serialize(Archive& ar, ParticleSLAM& p, const unsigned int version)
+void serialize(Archive& ar, SynthSLAM& p, const unsigned int version)
 {
     ar & p.cardinalities ;
     ar & p.cardinality_birth ;
@@ -250,8 +251,37 @@ void write_map_mat( vector<vector<GaussianType> > maps, mxArray*& ptr_maps)
     }
 }
 
+void write_map_mat( vector<ParticleMap> maps, mxArray*& ptr_maps)
+{
+    mwSize n_particles = maps.size() ;
+    mxArray* ptr_particles = NULL ;
+    for ( unsigned int p = 0 ; p < n_particles ; p++ )
+    {
+        ParticleMap map = maps[p] ;
+        mwSize n_features = map.x.size()/config.particlesPerFeature ;
+        mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
+        ptr_particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
+        if ( n_features > 0 )
+        {
+            mwSize outer_stride = config.particlesPerFeature*3 ;
+            mwSize inner_stride = 3 ;
+            for ( int i = 0 ; i < n_features ; i++ ){
+                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride] =
+                            map.x[i*config.particlesPerFeature+j] ;
+                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+1] =
+                            map.y[i*config.particlesPerFeature+j] ;
+                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+2] =
+                            map.z[i*config.particlesPerFeature+j] ;
+                }
+            }
+        }
+        mxSetCell(ptr_maps,p,ptr_particles);
+    }
+}
+
 void
-writeParticlesMat(ParticleSLAM particles, int t = -1,
+writeParticlesMat(SynthSLAM particles, int t = -1,
                   const char* filename="particles")
 {
         // create the filename
@@ -333,184 +363,80 @@ writeParticlesMat(ParticleSLAM particles, int t = -1,
         mxDestroyArray( mxParticles ) ;
 }
 
-//void writeLogMat(ParticleSLAM<Gaussian4D> particles, ConstantVelocityState expectedPose,
-//                                gaussianMixture expectedMap, vector<REAL> cn_estimate, int t)
-//{
-////        writeParticlesMat(particles,t) ;
+void
+writeParticlesMat(DisparitySLAM particles, int t = -1,
+                  const char* filename="particles")
+{
+        // create the filename
+        std::ostringstream oss ;
+        oss << filename ;
+        oss << setfill('0') << setw(5) ;
+        oss << t << ".mat" ;
+        std::string matfilename = oss.str() ;
 
-////	fstream zFile("measurements.log", fstream::out|fstream::app ) ;
-////	for ( unsigned int n = 0 ; n < Z.size() ; n++ )
-////	{
-////		zFile << Z[n].range << " " << Z[n].bearing << " ";
-////	}
-////	zFile << endl ;
-////	zFile.close() ;
-////
+        // load particle states, weights, and resample indices into mxArrays
+//        DEBUG_MSG("states,weights,resample_idx") ;
+        mwSize nParticles = particles.n_particles ;
+        mxArray* states = mxCreateNumericMatrix(6,nParticles,
+                                                mxDOUBLE_CLASS,mxREAL) ;
+        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
+                                                 mxDOUBLE_CLASS,mxREAL) ;
+        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
+                                                      mxINT32_CLASS,mxREAL ) ;
+        int i = 0 ;
+        int* ptr_resample = (int*)mxGetData(resample_idx) ;
+        for ( unsigned int p = 0 ; p < nParticles ; p++ )
+        {
+            mxGetPr(states)[i+0] = particles.states[p].pose.px ;
+            mxGetPr(states)[i+1] = particles.states[p].pose.py ;
+            mxGetPr(states)[i+2] = particles.states[p].pose.ptheta ;
+            mxGetPr(states)[i+3] = particles.states[p].pose.vx ;
+            mxGetPr(states)[i+4] = particles.states[p].pose.vy ;
+            mxGetPr(states)[i+5] = particles.states[p].pose.vtheta ;
+            mxGetPr(weights)[p] = particles.weights[p] ;
+            ptr_resample[p] = particles.resample_idx[p] ;
+            i+=6 ;
+        }
 
-//        // create the filename
-//        std::ostringstream oss ;
-//                oss << "state_estimate" << t << ".mat" ;
-//        std::string expectationFilename = oss.str() ;
+        // copy maps to mxarray
+//        DEBUG_MSG("copy maps") ;
+        mxArray* maps = mxCreateCellMatrix(1,nParticles) ;
+        if(config.saveAllMaps)
+        {
+            write_map_mat( particles.maps, maps ) ;
+        }
+        else
+        {
+            vector<ParticleMap > tmp_map_vector ;
+            tmp_map_vector.push_back( particles.map_estimate ) ;
+            write_map_mat( tmp_map_vector, maps ) ;
+        }
 
-//                const char* fieldNames[] = {"pose","map","cardinality","particles"} ;
-//                mxArray* mxStates = mxCreateStructMatrix(1,1,4,fieldNames) ;
+        // assemble final mat-file structure
+//        DEBUG_MSG("assemble mat-file") ;
+        const char* particleFieldNames[] = {"states","weights","maps",
+                                            "resample_idx"} ;
+//        DEBUG_MSG("mxCreateStructMatrix") ;
+        mxArray* mxParticles = mxCreateStructMatrix(1,1,5,particleFieldNames) ;
+//        DEBUG_MSG("states") ;
+        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
+//        DEBUG_MSG("weights") ;
+        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
+//        DEBUG_MSG("maps_static") ;
+        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
+//        DEBUG_MSG("resample_idx") ;
+        mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
 
-//        // pack data into mxArrays
+        // write to mat file
+        DEBUG_MSG("Write to mat-file") ;
+        MATFile* matfile = matOpen( matfilename.c_str(), "w" ) ;
+        matPutVariable( matfile, "particles", mxParticles ) ;
+        matClose(matfile) ;
 
-//                // estimated pose
-//        mxArray* mxPose = mxCreateNumericMatrix(6,1,mxDOUBLE_CLASS,mxREAL) ;
-//        mxGetPr( mxPose )[0] = expectedPose.px ;
-//        mxGetPr( mxPose )[1] = expectedPose.py ;
-//        mxGetPr( mxPose )[2] = expectedPose.ptheta ;
-//        mxGetPr( mxPose )[3] = expectedPose.vx ;
-//        mxGetPr( mxPose )[4] = expectedPose.vy ;
-//        mxGetPr( mxPose )[5] = expectedPose.vtheta ;
-
-//                // estimated map
-//        const char* mapFieldNames[] = {"weights","means","covs"} ;
-//        mxArray* mxMap = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
-//        int nFeatures = expectedMap.size() ;
-//        mwSize covDims[3] = {2,2,2} ;
-//        covDims[2] = nFeatures ;
-//        mxArray* mxWeights = mxCreateNumericMatrix(1,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
-//        mxArray* mxMeans = mxCreateNumericMatrix(2,nFeatures,mxDOUBLE_CLASS,mxREAL) ;
-//        mxArray* mxCovs = mxCreateNumericArray(3,covDims,mxDOUBLE_CLASS,mxREAL) ;
-//        if ( nFeatures > 0 )
-//        {
-//                for ( int i = 0 ; i < nFeatures ; i++ )
-//                {
-//                        mxGetPr( mxWeights )[i] = expectedMap[i].weight ;
-//                        mxGetPr( mxMeans )[2*i+0] = expectedMap[i].mean[0] ;
-//                        mxGetPr( mxMeans )[2*i+1] = expectedMap[i].mean[1] ;
-//                        mxGetPr( mxCovs )[4*i+0] = expectedMap[i].cov[0] ;
-//                        mxGetPr( mxCovs )[4*i+1] = expectedMap[i].cov[1] ;
-//                        mxGetPr( mxCovs )[4*i+2] = expectedMap[i].cov[2] ;
-//                        mxGetPr( mxCovs )[4*i+3] = expectedMap[i].cov[3] ;
-//                }
-//        }
-//        mxSetFieldByNumber( mxMap, 0, 0, mxWeights ) ;
-//        mxSetFieldByNumber( mxMap, 0, 1, mxMeans ) ;
-//        mxSetFieldByNumber( mxMap, 0, 2, mxCovs ) ;
-
-//                // estimated cardinality
-//                mxArray* mx_cn = mxCreateNumericMatrix(1,config.maxCardinality+1,mxDOUBLE_CLASS,mxREAL) ;
-//                for ( int n = 0 ; n <= config.maxCardinality ; n++ )
-//                {
-//                        mxGetPr( mx_cn )[n] = cn_estimate[n] ;
-//                }
-
-//                // particle poses and weights
-//                int n_particles = particles.nParticles ;
-//                const char* particle_field_names[] = {"weights","poses"} ;
-//                mxArray* mx_particles = mxCreateStructMatrix(1,1,2,particle_field_names) ;
-//                mxArray* mx_particle_weights = mxCreateNumericMatrix(1,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-//                mxArray* mx_particle_poses = mxCreateNumericMatrix(6,n_particles,mxDOUBLE_CLASS,mxREAL) ;
-//                for ( int i = 0 ; i < n_particles ; i++ )
-//                {
-//                        mxGetPr( mx_particle_weights )[i] = particles.weights[i] ;
-//                        mxGetPr( mx_particle_poses )[6*i+0] = particles.states[i].px ;
-//                        mxGetPr( mx_particle_poses )[6*i+1] = particles.states[i].py ;
-//                        mxGetPr( mx_particle_poses )[6*i+2] = particles.states[i].ptheta ;
-//                        mxGetPr( mx_particle_poses )[6*i+3] = particles.states[i].vx ;
-//                        mxGetPr( mx_particle_poses )[6*i+4] = particles.states[i].vy ;
-//                        mxGetPr( mx_particle_poses )[6*i+5] = particles.states[i].vtheta ;
-//                }
-//                mxSetFieldByNumber( mx_particles,0,0,mx_particle_weights ) ;
-//                mxSetFieldByNumber( mx_particles,0,1,mx_particle_poses) ;
-////	// resize the array to accommodate the new entry
-////	mxSetM( mxStates, t+1 ) ;
-
-//        // save the new entry
-//        mxSetFieldByNumber( mxStates, 0, 0, mxPose ) ;
-//        mxSetFieldByNumber( mxStates, 0, 1, mxMap ) ;
-//                mxSetFieldByNumber( mxStates, 0, 2, mx_cn) ;
-//                mxSetFieldByNumber( mxStates, 0, 3, mx_particles) ;
-
-//        // write to the mat-file
-//        MATFile* expectationFile = matOpen( expectationFilename.c_str(), "w") ;
-//        matPutVariable( expectationFile, "expectation", mxStates ) ;
-//        matClose( expectationFile ) ;
-
-//        // clean up
-//        mxDestroyArray( mxStates ) ;
-//}
-
-//void writeParticles(ParticleSLAM particles, std::string filename, int t = -1)
-//{
-//        std::ostringstream oss ;
-//        oss << filename ;
-//        oss << setfill('0') << setw(5) ;
-//        oss << t << ".log" ;
-//        std::string particlesFilename = oss.str() ;
-////        if ( t >= 0 )
-////        {
-////                char timeStep[8] ;
-////                sprintf(timeStep,"%d",t) ;
-////                particlesFilename += timeStep ;
-////        }
-////        particlesFilename += ".log" ;
-//        fstream particlesFile(particlesFilename.c_str(), fstream::out|fstream::app ) ;
-//        if (!particlesFile)
-//        {
-//                cout << "failed to open log file" << endl ;
-//                return ;
-//        }
-//        for ( int n = 0 ; n < particles.nParticles ; n++ )
-//        {
-//                particlesFile << particles.weights[n] << " "
-//                                << particles.states[n].px << " "
-//                                << particles.states[n].py << " "
-//                                << particles.states[n].ptheta << " "
-//                                << particles.states[n].vx << " "
-//                                << particles.states[n].vy << " "
-//                                << particles.states[n].vtheta << " " ;
-//                for ( int i = 0 ; i < (int)particles.maps[n].size() ; i++ )
-//                {
-//                        particlesFile << particles.maps[n][i].weight << " "
-//                                        << particles.maps[n][i].mean[0] << " "
-//                                        << particles.maps[n][i].mean[1] << " "
-//                                        << particles.maps[n][i].cov[0] << " "
-//                                        << particles.maps[n][i].cov[1] << " "
-//                                        << particles.maps[n][i].cov[2] << " "
-//                                        << particles.maps[n][i].cov[3] << " " ;
-//                }
-//                particlesFile << endl ;
-//        }
-//        particlesFile.close() ;
-//}
-
-//ParticleSLAM loadParticles(std::string filename)
-//{
-//    ifstream file( filename.c_str() ) ;
-//    int n_particles = std::count(std::istreambuf_iterator<char>(file),
-//                                std::istreambuf_iterator<char>(), '\n');
-//    ParticleSLA particles(n_particles) ;
-//    cout << "reading " << n_particles << " particles from " << filename << endl ;
-//    file.seekg(ifstream::beg) ;
-//    for ( int n = 0 ; n < n_particles ; n++ )
-//    {
-//        std::string line ;
-//        getline(file,line) ;
-////        cout << line << endl ;
-//        istringstream iss(line) ;
-//        iss >> particles.weights[n] >> particles.states[n].px
-//            >> particles.states[n].py >> particles.states[n].ptheta
-//            >> particles.states[n].vx >> particles.states[n].vy
-//            >> particles.states[n].vtheta ;
-//        while ( !iss.eof() )
-//        {
-//            Gaussian4D feature ;
-//            iss >> feature.weight >> feature.mean[0] >> feature.mean[1]
-//                >> feature.cov[0] >> feature.cov[1] >> feature.cov[2]
-//                >> feature.cov[3] ;
-//            particles.maps[n].push_back(feature) ;
-//        }
-//        particles.maps[n].pop_back() ;
-////        cout << "read " << particles.maps[n].size() << " features" << endl ;
-//    }
-
-//    return particles ;
-//}
+        // clean up
+        DEBUG_MSG("mxDestroyArray") ;
+        mxDestroyArray( mxParticles ) ;
+}
 
 /// write a vector of features as a single line to an output stream,
 /// with a terminating newline
@@ -537,7 +463,7 @@ void write_map(ostream out, vector<GaussianType> map)
     out << endl ;
 }
 
-void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
+void writeLog(const SynthSLAM& particles, ConstantVelocityState expectedPose,
             vector<Gaussian2D> expected_map_static, vector<Gaussian4D> expected_map_dynamic,
             vector<int> idx_resample,
                                 vector<REAL> cn_estimate, int t)
@@ -645,62 +571,6 @@ void writeLog(const ParticleSLAM& particles, ConstantVelocityState expectedPose,
         stateFile.close() ;
 }
 
-//void writeParticlesPickle( ParticleSLAM<Gaussian4D> particles, const char* filename, int t = -1 )
-//{
-//	// create the filename
-//	std::string particlesFilename(filename) ;
-//	if ( t >= 0 )
-//	{
-//			char timeStep[8] ;
-//			sprintf(timeStep,"%d",t) ;
-//			particlesFilename += timeStep ;
-//	}
-//	particlesFilename += ".p2" ;
-
-//	Arr weights_arr(particles.nParticles) ;
-//	Arr poses_arr(particles.nParticles) ;
-//	Arr maps_arr( particles.nParticles ) ;
-//	for ( int i = 0 ; i < particles.nParticles ; i++ )
-//	{
-//		weights_arr.append( particles.weights[i] ) ;
-
-//		Arr single_pose(6) ;
-//		single_pose.append( particles.states[i].px ) ;
-//		single_pose.append( particles.states[i].py ) ;
-//		single_pose.append( particles.states[i].ptheta );
-//		single_pose.append( particles.states[i].vx ) ;
-//		single_pose.append( particles.states[i].vy ) ;
-//		single_pose.append( particles.states[i].vtheta );
-//		poses_arr.append( single_pose ) ;
-
-//		Tab single_map ;
-//		int map_size = particles.maps[i].size() ;
-//		Arr map_weights_arr(map_size) ;
-//		Arr map_means_arr(map_size*2) ;
-//		Arr map_covs_arr(map_size*4) ;
-//		for ( int j = 0 ; j < map_size ; j++ )
-//		{
-//			map_weights_arr.append( particles.maps[i][j].weight ) ;
-//			map_means_arr.append( particles.maps[i][j].mean[0] ) ;
-//			map_means_arr.append( particles.maps[i][j].mean[1] ) ;
-//			map_covs_arr.append( particles.maps[i][j].cov[0] ) ;
-//			map_covs_arr.append( particles.maps[i][j].cov[1] ) ;
-//			map_covs_arr.append( particles.maps[i][j].cov[2] ) ;
-//			map_covs_arr.append( particles.maps[i][j].cov[3] ) ;
-//		}
-//		single_map["weights"] = map_weights_arr ;
-//		single_map["means"] = map_means_arr ;
-//		single_map["covs"] = map_covs_arr ;
-//		maps_arr.append( single_map ) ;
-//	}
-//	Tab particles_tab ;
-//	particles_tab["weights"] = weights_arr ;
-//	particles_tab["poses"] = poses_arr ;
-//	particles_tab["maps"] = maps_arr ;
-
-//	DumpValToFile( particles_tab, particlesFilename, SERIALIZE_P2 ) ;
-//}
-
 void loadConfig(const char* filename)
 {
     using namespace boost::program_options ;
@@ -724,7 +594,7 @@ void loadConfig(const char* filename)
             ("std_range", value<REAL>(&config.stdRange)->default_value(1.0), "Standard deviation of sensor range noise")
             ("clutter_rate", value<REAL>(&config.clutterRate)->default_value(15), "Poisson mean number of clutter measurements per scan")
             ("pd", value<REAL>(&config.pd)->default_value(0.98), "Nominal probability of detection for in-range features")
-            ("ps", value<REAL>(&config.ps)->default_value(0.8), "Nominal probability of survival for dynamic features")
+            ("ps", value<REAL>(&config.ps)->default_value(0.98), "Nominal probability of survival for dynamic features")
             ("n_particles", value<int>(&config.n_particles)->default_value(512), "Number of vehicle pose particles")
 			("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
             ("resample_threshold", value<REAL>(&config.resampleThresh)->default_value(0.15), "Threshold on normalized nEff for particle resampling")
@@ -792,10 +662,20 @@ void loadConfig(const char* filename)
         catch( std::exception& e )
         {
             cout << "Error parsing config file: " << e.what() << endl ;
-//            exit(1);
         }
     }
+}
 
+void run_disparity(){
+    CameraState initial_state ;
+    initial_state.fx = 1600 ;
+    initial_state.fy = 1600 ;
+    initial_state.u0 = 400 ;
+    initial_state.v0 = 300 ;
+    DisparitySLAM slam(initial_state,500) ;
+    for ( int k = 0 ; k < 363 ; k++ ){
+        disparityPredict(slam) ;
+    }
 }
 
 int main(int argc, char *argv[])
@@ -868,7 +748,7 @@ int main(int argc, char *argv[])
         nSteps = config.maxSteps ;
 
     // initialize particles
-    ParticleSLAM particles(config.n_particles) ;
+    SynthSLAM particles(config.n_particles) ;
     for (int n = 0 ; n < config.n_particles ; n++ )
     {
         particles.states[n].px = config.x0 ;
@@ -907,7 +787,7 @@ int main(int argc, char *argv[])
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
-    ParticleSLAM particlesPreMerge(particles) ;
+    SynthSLAM particlesPreMerge(particles) ;
     ConstantVelocityState expectedPose ;
     vector<Gaussian2D> expected_map_static ;
     vector<Gaussian4D> expected_map_dynamic ;
@@ -1021,9 +901,6 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
         DEBUG_MSG( "Writing Log" ) ;
         writeParticlesMat(particles,n) ;
-//        writeLog(particles, expectedPose, expected_map_static,
-//                 expected_map_dynamic,idx_resample, cn_estimate, n) ;
-//                writeParticles(particles,"particles",n) ;
 #endif
 
         nEff = 0 ;

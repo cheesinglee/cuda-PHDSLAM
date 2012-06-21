@@ -17,6 +17,7 @@ HEADERS += \
     src/phdfilter.h \
     src/slamplot.h \
 #    src/gaussian_mixture_reduction.h
+    src/disparity.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -53,7 +54,7 @@ LIBS += -lboost_program_options -lboost_random -lboost_serialization
 
 #### FFTW libraries ######################################################
 # needs to be statically linked to avoid conflicts with the MATLAB libs
-LIBS += -lfftw3 -lm
+#LIBS += -lfftw3 -lm
 ##########################################################################
 
 #### CImg libraries ######################################################
@@ -108,7 +109,7 @@ CUDA_INC = $$join(INCLUDEPATH,' -I','-I',' ')
 cuda.input = CUDA_SOURCES
 cuda.output = ${OBJECTS_DIR}${QMAKE_FILE_BASE}_cuda.o
 
-cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -O0 -gencode=$$CUDA_GENCODE -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
+cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -gencode=$$CUDA_GENCODE -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
 
 cuda.dependcy_type = TYPE_C
 cuda.depend_command = $$CUDA_DIR/bin/nvcc -g -G -M $$CUDA_INC $$NVCCFLAGS ${QMAKE_FILE_NAME}

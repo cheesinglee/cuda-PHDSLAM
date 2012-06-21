@@ -8,24 +8,27 @@ void
 initCphdConstants() ;
 
 void
-predictMap(ParticleSLAM& p) ;
+predictMap(SynthSLAM& p) ;
 
 void
-phdPredict(ParticleSLAM& particles, ... ) ;
+phdPredict(SynthSLAM& particles, ... ) ;
 
 template<class GaussianType>
 void
-phdPredictVp( ParticleSLAM& particles ) ;
+phdPredictVp( SynthSLAM& particles ) ;
 
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
+SynthSLAM
+phdUpdate(SynthSLAM& particles, measurementSet measurements) ;
 
-ParticleSLAM
-resampleParticles( ParticleSLAM oldParticles, int n_particles=-1 ) ;
+SynthSLAM
+resampleParticles( SynthSLAM oldParticles, int n_particles=-1 ) ;
 
 void
-recoverSlamState(ParticleSLAM& particles, ConstantVelocityState& expectedPose,
+recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
         vector<REAL>& cn_estimate ) ;
+
+void
+recoverSlamState(DisparitySLAM& particles, ConstantVelocityState& expectedPose ) ;
 
 void
 setDeviceConfig( const SlamConfig& config ) ;

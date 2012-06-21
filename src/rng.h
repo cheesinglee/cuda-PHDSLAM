@@ -21,4 +21,7 @@ double randn() ;
 extern "C"
 double randu01() ;
 
+extern "C"
+void randmvn3(double* mean, double* cov, int n,double* results) ;
+
 #endif // RNG_H

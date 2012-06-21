@@ -22,13 +22,19 @@
 #include "slamtypes.h"
 //#include "slamparams.h"
 #include <cutil.h>
-#include <complex.h>
-#include <fftw3.h>
+//#include <complex.h>
+//#include <fftw3.h>
 #include <assert.h>
 #include <float.h>
 #include "cuPrintf.cu"
 
 #include "device_math.cuh"
+
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/for_each.h>
+#include <thrust/remove.h>
+#include <thrust/iterator/zip_iterator.h>
 
 //#include "ConstantVelocity2DKinematicModel.cu"
 
@@ -58,24 +64,27 @@ void
 initCphdConstants() ;
 
 void
-predictMap(ParticleSLAM& p) ;
+predictMap(SynthSLAM& p) ;
 
 void
-phdPredict(ParticleSLAM& particles, ... ) ;
+phdPredict(SynthSLAM& particles, ... ) ;
 
 template<class GaussianType>
 void
-phdPredictVp( ParticleSLAM& particles ) ;
+phdPredictVp( SynthSLAM& particles ) ;
 
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements) ;
+SynthSLAM
+phdUpdate(SynthSLAM& particles, measurementSet measurements) ;
 
-ParticleSLAM
-resampleParticles( ParticleSLAM oldParticles, int n_particles=-1 ) ;
+SynthSLAM
+resampleParticles( SynthSLAM oldParticles, int n_particles=-1 ) ;
 
 void
-recoverSlamState(ParticleSLAM& particles, ConstantVelocityState& expectedPose,
+recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
                  vector<REAL>& cn_estimate ) ;
+
+void
+recoverSlamState(DisparitySLAM& particles, ConstantVelocityState& expectedPose ) ;
 
 void
 setDeviceConfig( const SlamConfig& config ) ;
@@ -96,6 +105,7 @@ extern size_t deviceMemLimit ;
 extern __shared__ REAL shmem[] ;
 
 using namespace std ;
+using namespace thrust ;
 
 // Constant memory variables
 __device__ __constant__ RangeBearingMeasurement Z[256] ;
@@ -953,7 +963,7 @@ predictMapKernelMixed(Gaussian4D* features_prior,
 }
 
 void
-predictMapMixed(ParticleSLAM& particles)
+predictMapMixed(SynthSLAM& particles)
 {
     // combine all dynamic features into one vector
     vector<Gaussian4D> all_features = combineFeatures(particles.maps_dynamic) ;
@@ -998,6 +1008,7 @@ predictMapMixed(ParticleSLAM& particles)
     Gaussian2D* begin_jump = &all_features_jump[0] ;
     Gaussian2D* end_jump = begin_jump
             + particles.maps_dynamic[0].size() ;
+
     for ( int n = 0 ; n < particles.n_particles ; n++ )
     {
         particles.maps_dynamic[n].assign(begin,end) ;
@@ -1025,7 +1036,7 @@ predictMapMixed(ParticleSLAM& particles)
 
 //template <class GaussianType>
 //void
-//predictMap(ParticleSLAM& particles)
+//predictMap(SynthSLAM& particles)
 //{
 //    // combine all dynamic features into one vector
 //    vector<Gaussian4D> all_features = combineFeatures(particles.maps_dynamic) ;
@@ -1067,7 +1078,7 @@ predictMapMixed(ParticleSLAM& particles)
 
 /// host-side helper function for PHD filter prediction
 void
-phdPredict(ParticleSLAM& particles, ... )
+phdPredict(SynthSLAM& particles, ... )
 {
     // start timer
     cudaEvent_t start, stop ;
@@ -1852,8 +1863,7 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
 
 /// perform the gaussian mixture PHD update
 /**
-  PHD update algorithm as in Vo & Ma 2006. Gaussian mixture reduction (merging),
-  as in the clustering algorithm by Salmond 1990.
+  PHD update algorithm as in Vo & Ma 2006.
     \param inRangeFeatures Array of in-range Gaussians, with which the PHD
         update will be performed
     \param map_sizes_static Integer array of sizes of each particle's map
@@ -1876,8 +1886,10 @@ cphdUpdateKernel( int* map_offsets, int n_measurements,
   */
 template <class GaussianType>
 __global__ void
-phdUpdateKernel(ConstantVelocityState* poses,
-                GaussianType* features_predict,
+phdUpdateKernel(GaussianType* features_predict,
+                REAL* featurePd,
+                GaussianType* features_preupdate,
+                GaussianType* features_birth,
                 int* map_offsets,
                 int n_particles, int n_measure,
                 GaussianType* features_update,
@@ -1887,8 +1899,6 @@ phdUpdateKernel(ConstantVelocityState* poses,
     // shared memory variables
     __shared__ REAL sdata[256] ;
 
-
-    ConstantVelocityState pose ;
     REAL particle_weight = 0 ;
     REAL cardinality_predict = 0 ;
     int map_idx = 0 ;
@@ -1896,15 +1906,17 @@ phdUpdateKernel(ConstantVelocityState* poses,
     int n_features = 0 ;
     int n_update = 0 ;
     int predict_offset = 0 ;
+    int preupdate_offset = 0 ;
+    int birth_offset = 0 ;
 
 
     // initialize variables
     int tid = threadIdx.x ;
     // pre-update variables
-    REAL featurePd = 0 ;
     GaussianType feature ;
 
     // update variables
+    int preupdate_stride = map_offsets[n_particles] ;
     REAL w_partial = 0 ;
     int updateIdx = 0 ;
 
@@ -1918,11 +1930,12 @@ phdUpdateKernel(ConstantVelocityState* poses,
             predict_offset = map_offsets[map_idx] ;
             update_offset = predict_offset*(n_measure+1) +
                     map_idx*n_measure ;
+            preupdate_offset = predict_offset*n_measure ;
             n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
             n_update = (n_features)*(n_measure+1) + n_measure ;
-            pose = poses[map_idx] ;
             particle_weight = 0 ;
             cardinality_predict = 0.0 ;
+            birth_offset = p*n_measure ;
 
             // loop over predicted features + newborn features
             for ( int j = 0 ; j < (n_features+n_measure) ; j += blockDim.x )
@@ -1932,17 +1945,28 @@ phdUpdateKernel(ConstantVelocityState* poses,
                 if ( feature_idx < n_features )
                 {
                     // persistent feature
-
-                    // get the feature corresponding to the current thread
                     feature = features_predict[predict_offset+feature_idx] ;
 
-                    GaussianType* ptr_nondetect = features_update+update_offset
+                    REAL pd = featurePd[predict_offset] ;
+
+                    // save non-detection term
+                    int idx_nondetect = update_offset
                             + feature_idx ;
-                    GaussianType* ptr_update = ptr_nondetect + n_features ;
-                    computePreUpdate(pose,feature,n_features,n_measure,
-                                     featurePd,*ptr_nondetect,
-                                     ptr_update);
-                    w_partial = featurePd*feature.weight ;
+                    features_update[idx_nondetect] = feature ;
+                    features_update[idx_nondetect].weight *= (1-pd) ;
+
+                    // save the detection terms
+                    for (int m = 0 ; m < n_measure ; m++){
+                        int preupdate_idx = m*preupdate_stride +
+                                preupdate_offset + feature_idx ;
+                        int update_idx = update_offset + n_features +
+                                feature_idx ;
+                        copy_gaussians(features_preupdate[preupdate_idx],
+                                       features_update[update_idx]) ;
+                        features_update[update_idx] = features_preupdate[preupdate_idx] ;
+                    }
+
+                    w_partial = pd*feature.weight ;
                 }
                 else if (feature_idx < n_features+n_measure)
                 {
@@ -1951,23 +1975,11 @@ phdUpdateKernel(ConstantVelocityState* poses,
                     // find measurement corresponding to current thread
                     int z_idx = feature_idx - n_features ;
 
-                    GaussianType* ptr_birth = features_update +
-                            update_offset + n_features
+                    int idx_birth = update_offset + n_features
                             + n_measure*n_features + z_idx ;
-                    computeBirth(pose,Z[z_idx],*ptr_birth);
+                    features_update[idx_birth] = features_birth[birth_offset+z_idx] ;
 
-                    // set Pd to 1 for newborn features
-                    w_partial = 0 ;
-                    // no non-detection term for newborn features
-                    if(tid==0 && map_idx==0)
-                    {
-                        if ( feature_idx == n_features)
-                        {
-                            cuPrintf("before: %f\n",ptr_birth->weight) ;
-                            ptr_birth->weight = safeLog(dev_config.birthWeight) ;
-                            cuPrintf("after: %f\n",ptr_birth->weight) ;
-                        }
-                    }
+                    w_partial = dev_config.birthWeight ;
                 }
                 else
                 {
@@ -2070,6 +2082,202 @@ phdUpdateKernel(ConstantVelocityState* poses,
         }
     }
 }
+//template <class GaussianType>
+//__global__ void
+//phdUpdateKernel(ConstantVelocityState* poses,
+//                GaussianType* features_predict,
+//                int* map_offsets,
+//                int n_particles, int n_measure,
+//                GaussianType* features_update,
+//                bool* merge_flags,
+//                REAL* particle_weights)
+//{
+//    // shared memory variables
+//    __shared__ REAL sdata[256] ;
+
+
+//    ConstantVelocityState pose ;
+//    REAL particle_weight = 0 ;
+//    REAL cardinality_predict = 0 ;
+//    int map_idx = 0 ;
+//    int update_offset = 0 ;
+//    int n_features = 0 ;
+//    int n_update = 0 ;
+//    int predict_offset = 0 ;
+
+
+//    // initialize variables
+//    int tid = threadIdx.x ;
+//    // pre-update variables
+//    REAL featurePd = 0 ;
+//    GaussianType feature ;
+
+//    // update variables
+//    REAL w_partial = 0 ;
+//    int updateIdx = 0 ;
+
+//    // loop over particles
+//    for ( int p = 0 ; p < n_particles ; p += gridDim.x )
+//    {
+//        if ( p + blockIdx.x < n_particles )
+//        {
+//            // initialize map-specific variables
+//            map_idx = p + blockIdx.x ;
+//            predict_offset = map_offsets[map_idx] ;
+//            update_offset = predict_offset*(n_measure+1) +
+//                    map_idx*n_measure ;
+//            n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
+//            n_update = (n_features)*(n_measure+1) + n_measure ;
+//            pose = poses[map_idx] ;
+//            particle_weight = 0 ;
+//            cardinality_predict = 0.0 ;
+
+//            // loop over predicted features + newborn features
+//            for ( int j = 0 ; j < (n_features+n_measure) ; j += blockDim.x )
+//            {
+//                int feature_idx = j + tid ;
+//                w_partial = 0 ;
+//                if ( feature_idx < n_features )
+//                {
+//                    // persistent feature
+
+//                    // get the feature corresponding to the current thread
+//                    feature = features_predict[predict_offset+feature_idx] ;
+
+//                    GaussianType* ptr_nondetect = features_update+update_offset
+//                            + feature_idx ;
+//                    GaussianType* ptr_update = ptr_nondetect + n_features ;
+//                    computePreUpdate(pose,feature,n_features,n_measure,
+//                                     featurePd,*ptr_nondetect,
+//                                     ptr_update);
+//                    w_partial = featurePd*feature.weight ;
+//                }
+//                else if (feature_idx < n_features+n_measure)
+//                {
+//                    // newborn feature
+
+//                    // find measurement corresponding to current thread
+//                    int z_idx = feature_idx - n_features ;
+
+//                    GaussianType* ptr_birth = features_update +
+//                            update_offset + n_features
+//                            + n_measure*n_features + z_idx ;
+//                    computeBirth(pose,Z[z_idx],*ptr_birth);
+
+//                    // set Pd to 1 for newborn features
+//                    w_partial = 0 ;
+//                    // no non-detection term for newborn features
+//                    if(tid==0 && map_idx==0)
+//                    {
+//                        if ( feature_idx == n_features)
+//                        {
+//                            cuPrintf("before: %f\n",ptr_birth->weight) ;
+//                            ptr_birth->weight = safeLog(dev_config.birthWeight) ;
+//                            cuPrintf("after: %f\n",ptr_birth->weight) ;
+//                        }
+//                    }
+//                }
+//                else
+//                {
+//                    // thread does not correspond to a feature
+//                    w_partial = 0 ;
+//                }
+
+//                // compute predicted cardinality
+//                sumByReduction(sdata, w_partial, tid) ;
+//                cardinality_predict += sdata[0] ;
+//                __syncthreads() ;
+//            }
+
+//            // compute the weight normalizers
+//            for ( int i = 0 ; i < n_measure ; i++ )
+//            {
+//                REAL log_normalizer = 0 ;
+//                REAL val = 0 ;
+//                REAL sum = 0 ;
+//                GaussianType* ptr_update = features_update
+//                        + update_offset + n_features + i*n_features ;
+////                cuPrintf("%f\n",features_update[0].weight) ;
+//                if (n_features > 0)
+//                {
+//                    // find the maximum from all the log partial weights
+//                    for ( int j = 0 ; j < (n_features) ; j += blockDim.x )
+//                    {
+//                        int feature_idx = j + tid ;
+//                        if ( feature_idx < n_features )
+//                            val = exp(ptr_update[feature_idx].weight) ;
+//                        else
+//                            val = 0 ;
+//                        sumByReduction(sdata,val,tid);
+//                        sum += sdata[0] ;
+//                    }
+
+//                    // add clutter density and birth weight
+//                    sum += dev_config.clutterDensity ;
+//                    sum += dev_config.birthWeight ;
+
+//                    // put normalizer in log form
+//                    log_normalizer = safeLog(sum) ;
+//                }
+//                else
+//                {
+//                    sum = dev_config.clutterDensity + dev_config.birthWeight ;
+//                    log_normalizer = safeLog(sum) ;
+//                }
+
+//                // compute final feature weights
+//                for ( int j = 0 ; j < (n_features+1) ; j += blockDim.x )
+//                {
+//                    int feature_idx = j + tid ;
+//                    if ( feature_idx <= n_features)
+//                    {
+//                        if ( feature_idx < n_features )
+//                        {
+//                            // update detection weight
+//                            updateIdx = feature_idx ;
+//                        }
+//                        else if ( feature_idx == n_features )
+//                        {
+//                            // update birth term weight
+//                            updateIdx = (n_measure-i)*n_features + i ;
+////                            cuPrintf("%d\n",updateIdx) ;
+//                        }
+//                        ptr_update[updateIdx].weight =
+//                            exp(ptr_update[updateIdx].weight-log_normalizer) ;
+//                    }
+//                }
+
+//                // update the pose particle weights
+//                if ( tid == 0 )
+//                {
+//                    particle_weight += log_normalizer ;
+//                }
+//            }
+
+
+//            // Particle weighting
+//            __syncthreads() ;
+//            if ( tid == 0 )
+//            {
+//                particle_weight -= cardinality_predict ;
+//                particle_weights[map_idx] = particle_weight ;
+//            }
+//        }
+//        // set the merging flags
+//        for ( int j = 0 ; j < n_update ; j+=blockDim.x)
+//        {
+//            int feature_idx = j+tid ;
+//            if (feature_idx < n_update)
+//            {
+//                int idx = update_offset+feature_idx ;
+//                if (features_update[idx].weight<dev_config.minFeatureWeight)
+//                    merge_flags[idx] = true ;
+//                else
+//                    merge_flags[idx] = false;
+//            }
+//        }
+//    }
+//}
 
 __global__ void
 phdUpdateKernelMixed(ConstantVelocityState* poses,
@@ -2336,7 +2544,7 @@ template <class GaussianType>
 __global__ void
 phdUpdateMergeKernel(GaussianType* updated_features,
                      GaussianType* mergedFeatures, int *mergedSizes,
-                     bool *mergedFlags, int* map_sizes_static, int n_particles )
+                     bool *mergedFlags, int* map_offsets, int n_particles )
 {
     __shared__ GaussianType maxFeature ;
 //    __shared__ REAL wMerge ;
@@ -2363,12 +2571,8 @@ phdUpdateMergeKernel(GaussianType* updated_features,
             // initialize shared vars
             if ( tid == 0)
             {
-                update_offset = 0 ;
-                for ( int i = 0 ; i < map_idx ; i++ )
-                {
-                    update_offset += map_sizes_static[i] ;
-                }
-                n_update = map_sizes_static[map_idx] ;
+                update_offset = map_offsets[map_idx] ;
+                n_update = map_offsets[map_idx+1] - map_offsets[map_idx] ;
                 mergedSize = 0 ;
             }
             __syncthreads() ;
@@ -2750,7 +2954,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
                  int n_particles, int n_measure, int n_update,
                  vector<vector<GaussianType> >& maps_output )
 {
-    vector<int> map_sizes(n_particles) ;
+    vector<int> map_offsets(n_particles+1) ;
     size_t combined_size ;
     GaussianType* maps_merged = NULL ;
     int* map_sizes_merged = NULL ;
@@ -2764,7 +2968,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     GaussianType* dev_maps_combined = NULL ;
     bool* dev_merged_flags_combined = NULL ;
     int* dev_n_merged = NULL ;
-    int* dev_map_sizes = NULL ;
+    int* dev_map_offsets = NULL ;
 
     int n_out_range1 = features_out1.size() ;
     int n_out_range2 = features_out2.size() ;
@@ -2779,6 +2983,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
                                 (n_update+n_out_range2)*sizeof(bool) ) ) ;
 
 
+    map_offsets[0] = 0 ;
     for ( int n = 0 ; n < n_particles ; n++ )
     {
         // in-range map for particle n
@@ -2808,8 +3013,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
         offset_out += n_out_range2_vec[n] ;
 
 
-        map_sizes[n] = n_out_range2_vec[n] +
-                n_in_range_n ;
+        map_offsets[n+1] = offset ;
     }
 
     DEBUG_VAL(combined_size) ;
@@ -2817,9 +3021,9 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
                            combined_size ) ) ;
     CUDA_SAFE_CALL( cudaMalloc((void**)&dev_n_merged,
                                n_particles*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc((void**)&dev_map_sizes,
+    CUDA_SAFE_CALL( cudaMalloc((void**)&dev_map_offsets,
                                n_particles*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMemcpy( dev_map_sizes, &map_sizes[0],
+    CUDA_SAFE_CALL( cudaMemcpy( dev_map_offsets, &map_offsets[0],
                                 n_particles*sizeof(int),
                                 cudaMemcpyHostToDevice ) ) ;
     CUDA_SAFE_THREAD_SYNC() ;
@@ -2829,7 +3033,7 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     DEBUG_MSG("launching phdUpdateMergeKernel") ;
     phdUpdateMergeKernel<<<n_particles,256>>>
         ( dev_maps_combined, dev_maps_merged, dev_n_merged,
-          dev_merged_flags_combined, dev_map_sizes, n_particles ) ;
+          dev_merged_flags_combined, dev_map_offsets, n_particles ) ;
     CUDA_SAFE_THREAD_SYNC() ;
 
     // copy one feature and look at it
@@ -2857,10 +3061,10 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     offset_out = 0 ;
     for ( int i = 0 ; i < n_particles ; i++ )
     {
+        offset_updated = map_offsets[i] ;
 //        DEBUG_VAL(map_sizes_merged[i]) ;
         maps_output[i].assign(maps_merged+offset_updated,
                             maps_merged+offset_updated+map_sizes_merged[i]) ;
-        offset_updated += map_sizes[i] ;
 
         // recombine with out-of-range features, if any
         if ( n_out_range1 > 0 && n_out_range1_vec[i] > 0 )
@@ -2882,8 +3086,8 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     CUDA_SAFE_CALL( cudaFree( dev_merged_flags) ) ;
 }
 
-ParticleSLAM
-phdUpdate(ParticleSLAM& particles, measurementSet measurements)
+SynthSLAM
+phdUpdate(SynthSLAM& particles, measurementSet measurements)
 {
     //------- Variable Declarations ---------//
 
@@ -2896,7 +3100,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     vector<int> map_offsets_in_static(n_particles+1,0) ;
     vector<int> map_offsets_out_static(n_particles+1,0) ;
 
-    ParticleSLAM particlesPreMerge ;
+    SynthSLAM particlesPreMerge(particles) ;
 
     // device variables
     ConstantVelocityState* dev_poses = NULL ;
@@ -3011,19 +3215,19 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     else if(config.featureModel==STATIC_MODEL)
     {
         DEBUG_MSG("launching phdUpdateKernel Static") ;
-        phdUpdateKernel<<<nBlocks,256>>>(
-            dev_poses, dev_maps_inrange_static,dev_map_offsets_static,
-            n_particles,n_measure,dev_maps_updated_static,
-            dev_merged_flags_static,dev_particle_weights) ;
+//        phdUpdateKernel<<<nBlocks,256>>>(
+//            dev_poses, dev_maps_inrange_static,dev_map_offsets_static,
+//            n_particles,n_measure,dev_maps_updated_static,
+//            dev_merged_flags_static,dev_particle_weights) ;
         CUDA_SAFE_THREAD_SYNC() ;
     }
     else if(config.featureModel==DYNAMIC_MODEL)
     {
         DEBUG_MSG("launching phdUpdateKernel Dynamic") ;
-        phdUpdateKernel<<<nBlocks,256>>>(
-            dev_poses, dev_maps_inrange_dynamic,dev_map_offsets_dynamic,
-            n_particles,n_measure,dev_maps_updated_dynamic,
-            dev_merged_flags_dynamic,dev_particle_weights) ;
+//        phdUpdateKernel<<<nBlocks,256>>>(
+//            dev_poses, dev_maps_inrange_dynamic,dev_map_offsets_dynamic,
+//            n_particles,n_measure,dev_maps_updated_dynamic,
+//            dev_merged_flags_dynamic,dev_particle_weights) ;
         CUDA_SAFE_THREAD_SYNC() ;
     }
     cudaPrintfDisplay(stdout,false) ;
@@ -3088,7 +3292,7 @@ phdUpdate(ParticleSLAM& particles, measurementSet measurements)
     CUDA_SAFE_CALL( cudaMemcpy(particle_weights,dev_particle_weights,
                                n_particles*sizeof(REAL),
                                cudaMemcpyDeviceToHost ) ) ;
-    // multiply weights be multi-object likelihood
+    // multiply weights by multi-object likelihood
     for ( int i = 0 ; i < n_particles ; i++ )
     {
         particles.weights[i] += particle_weights[i]  ;
@@ -3125,13 +3329,13 @@ phdUpdate(SmcPhdSLAM& slam, measurementSet measurements)
     }
 }
 
-ParticleSLAM resampleParticles( ParticleSLAM oldParticles, int n_new_particles)
+SynthSLAM resampleParticles( SynthSLAM oldParticles, int n_new_particles)
 {
     if ( n_new_particles < 0 )
     {
         n_new_particles = oldParticles.n_particles ;
     }
-    ParticleSLAM newParticles(n_new_particles) ;
+    SynthSLAM newParticles(n_new_particles) ;
     vector<int> idx_resample(n_new_particles) ;
     double interval = 1.0/n_new_particles ;
     double r = randu01() * interval ;
@@ -3289,7 +3493,7 @@ bool expectedFeaturesPredicate( GaussianType g )
 }
 
 void
-recoverSlamState(ParticleSLAM& particles, ConstantVelocityState& expectedPose,
+recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
         vector<REAL>& cn_estimate )
 {
     if ( particles.n_particles > 1 )
@@ -3358,6 +3562,58 @@ recoverSlamState(ParticleSLAM& particles, ConstantVelocityState& expectedPose,
     }
 }
 
+void
+recoverSlamState(DisparitySLAM& particles, ConstantVelocityState& expectedPose)
+{
+    if ( particles.n_particles > 1 )
+    {
+        // calculate the weighted mean of the particle poses
+        expectedPose.px = 0 ;
+        expectedPose.py = 0 ;
+        expectedPose.ptheta = 0 ;
+        expectedPose.vx = 0 ;
+        expectedPose.vy = 0 ;
+        expectedPose.vtheta = 0 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            double exp_weight = exp(particles.weights[i]) ;
+            expectedPose.px += exp_weight*particles.states[i].pose.px ;
+            expectedPose.py += exp_weight*particles.states[i].pose.py ;
+            expectedPose.ptheta += exp_weight*particles.states[i].pose.ptheta ;
+            expectedPose.vx += exp_weight*particles.states[i].pose.vx ;
+            expectedPose.vy += exp_weight*particles.states[i].pose.vy ;
+            expectedPose.vtheta += exp_weight*particles.states[i].pose.vtheta ;
+        }
+
+        // Maximum a priori estimate
+        double max_weight = -FLT_MAX ;
+        int max_idx = -1 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            if ( particles.weights[i] > max_weight )
+            {
+                max_idx = i ;
+                max_weight = particles.weights[i] ;
+            }
+        }
+        DEBUG_VAL(max_idx) ;
+
+        if ( config.mapEstimate == 0)
+        {
+            particles.map_estimate = particles.maps[max_idx] ;
+        }
+        else
+        {
+
+        }
+    }
+    else
+    {
+        expectedPose = particles.states[0].pose ;
+        particles.map_estimate = particles.maps[0] ;
+    }
+}
+
 /// copy the configuration structure to constant device memory
 void
 setDeviceConfig( const SlamConfig& config )
@@ -3369,3 +3625,604 @@ setDeviceConfig( const SlamConfig& config )
 //--- explicitly instantiate templates so linking works correctly
 
 //--- End template specialization
+
+///////////////////////////////////////////////////////////////////
+
+/// functor for use with thrust::transform to convert particles in euclidean
+/// space to particles in disparity space (baseline = 1)
+/** pass a vector of camera states to the constructor
+  * the argument to the functor is an 8-element tuple, where each element is a
+  * vector with one element per feature particle. The first four elements are
+    inputs:
+  *     idx: index to the vector of camera states indicating to which camera
+             this particle belongs
+        x: x-coordinate of the particle
+        y: y-coordinate of the particle
+        z: z-coordinate of the particle
+    The last 4 elements are outputs computed by the functor:
+        u: u-coordinate of particle in disparity space
+        v: v-coordinate of particle in disparity space
+        d: disparity value of particle in disparity space
+        out_of_range: 1 if the particle is not visible to the camera
+  **/
+struct world_to_disparity_transform{
+    const CameraState* camera_states ;
+
+    world_to_disparity_transform(CameraState* _states) : camera_states(_states) {}
+
+    __host__ __device__ void
+    transformWorldToCamera(REAL xWorld, REAL yWorld, REAL zWorld,
+                           CameraState cam,
+                           REAL& xCamera, REAL& yCamera, REAL& zCamera){
+        REAL c = cos(cam.pose.ptheta) ;
+        REAL s = sin(cam.pose.ptheta) ;
+        xCamera = xWorld*c + yWorld*s - cam.pose.px*c - cam.pose.py*s ;
+        yCamera = -xWorld*s + yWorld*c + cam.pose.px*s - cam.pose.py*c ;
+        zCamera = zWorld ;
+    }
+
+
+    template <typename Tuple>
+    __host__ __device__ void
+    operator()(Tuple t){
+        using namespace thrust ;
+        CameraState cam = camera_states[get<0>(t)] ;
+        REAL x = get<1>(t) ;
+        REAL y = get<2>(t) ;
+        REAL z = get<3>(t) ;
+
+        REAL xCamera = 0 ;
+        REAL yCamera = 0 ;
+        REAL zCamera = 0 ;
+
+        transformWorldToCamera(x,y,z,cam,xCamera,yCamera,zCamera) ;
+
+        get<4>(t) = cam.u0 - cam.fx*xCamera/zCamera ;
+        get<5>(t) = cam.v0 - cam.fy*yCamera/zCamera ;
+        get<6>(t) = -cam.fx/zCamera ;
+
+        bool in_fov = (get<4>(t) > 0) &&
+                (get<4>(t) < dev_config.imageWidth) &&
+                (get<5>(t) > 0) &&
+                (get<5>(t) < dev_config.imageHeight) ;
+        get<7>(t) = in_fov ? 1 : 0 ;
+    }
+};
+
+/// functor for use with thrust::transform to convert particles in disparity
+/// space to particles in euclidean space (baseline = 1)
+/** pass a vector of camera states to the constructor
+  * the argument to the functor is an 7-element tuple, where each element is a
+  * vector with one element per feature particle. The first four elements are
+    inputs:
+  *     idx: index to the vector of camera states indicating to which camera
+             this particle belongs
+        u: u-coordinate of particle in disparity space
+        v: v-coordinate of particle in disparity space
+        d: disparity value of particle in disparity space
+    The last 3 elements are outputs computed by the functor:
+        x: x-coordinate of the particle
+        y: y-coordinate of the particle
+        z: z-coordinate of the particle
+  **/
+struct disparity_to_world_transform{
+    const CameraState* camera_states ;
+
+    disparity_to_world_transform(CameraState* _states) : camera_states(_states) {}
+
+    __host__ __device__ void
+    transformCameraToWorld(REAL xCamera, REAL yCamera, REAL zCamera,
+                          CameraState cam,
+                          REAL& xWorld, REAL& yWorld, REAL& zWorld){
+        REAL c = cos(cam.pose.ptheta) ;
+        REAL s = sin(cam.pose.ptheta) ;
+
+        xWorld = xCamera*c - yCamera*s + cam.pose.px ;
+        yWorld = xCamera*s + yCamera*c + cam.pose.py ;
+        zWorld = zCamera ;
+    }
+
+
+    template <typename Tuple>
+    __host__ __device__ void
+    operator()(Tuple t){
+        CameraState cam = camera_states[get<0>(t)] ;
+
+        REAL u = get<1>(t) ;
+        REAL v = get<2>(t) ;
+        REAL d = get<3>(t) ;
+
+        REAL xCamera = (u-cam.u0)/d ;
+        REAL yCamera = cam.fx/cam.fy*(v-cam.v0)/d ;
+        REAL zCamera = -cam.fx/d ;
+
+        transformCameraToWorld(xCamera,yCamera,zCamera,cam,
+                               get<4>(t),get<5>(t),get<6>(t)) ;
+    }
+};
+
+/// this is a binary predicate which returns the sum of two numerical values
+/// divided by an integer N. This can be used to compute the arithmetic mean of
+/// N numbers by reduction.
+struct compute_mean_predicate{
+    const int N ;
+    compute_mean_predicate(int _n) : N(_n) {}
+
+    template <typename T>
+    __host__ __device__ REAL
+    operator()(T x, T y){
+        return (REAL)(x+y)/N ;
+    }
+};
+
+__global__ void
+fitGaussiansKernel(REAL* uArray, REAL* vArray, REAL* dArray,
+                   int nGaussians,
+                   Gaussian3D* gaussians){
+    int tid = blockIdx.x*blockDim.x + threadIdx.x ;
+    __shared__ REAL sdata[256] ;
+    for (int i = blockIdx.x ; i < nGaussians ; i+=gridDim.x){
+        int nParticles = dev_config.particlesPerFeature ;
+        int offset = i*nParticles ;
+        REAL val = 0 ;
+
+        // compute mean u
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += uArray[offset+j] ;
+        }
+        sumByReduction(sdata,val,tid);
+        REAL uMean = sdata[0]/nParticles ;
+        __syncthreads() ;
+
+        // compute mean v
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += vArray[offset+j] ;
+        }
+        sumByReduction(sdata,val,tid);
+        REAL vMean = sdata[0]/nParticles ;
+        __syncthreads() ;
+
+        // compute mean d
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += dArray[offset+j] ;
+        }
+        sumByReduction(sdata,val,tid);
+        REAL dMean = sdata[0]/nParticles ;
+        __syncthreads() ;
+
+
+        // write means to output
+        if (tid == 0){
+            gaussians[i].mean[0] = uMean ;
+            gaussians[i].mean[1] = vMean ;
+            gaussians[i].mean[2] = dMean ;
+        }
+
+        // covariance term u-u
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += pow(uArray[offset+j]-uMean,2) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0)
+            gaussians[i].cov[0] = sdata[0]/(nParticles-1) ;
+        __syncthreads() ;
+
+        // covariance term v-v
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += pow(vArray[offset+j]-vMean,2) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0)
+            gaussians[i].cov[4] = sdata[0]/(nParticles-1) ;
+        __syncthreads() ;
+
+        // covariance term d-d
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += pow(dArray[offset+j]-dMean,2) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0)
+            gaussians[i].cov[8] = sdata[0]/(nParticles-1) ;
+        __syncthreads() ;
+
+        // covariance term u-v
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += (uArray[offset+j]-uMean)*(vArray[offset+j]-vMean) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0){
+            gaussians[i].cov[1] = sdata[0]/(nParticles-1) ;
+            gaussians[i].cov[3] = gaussians[i].cov[1] ;
+        }
+        __syncthreads() ;
+
+        // covariance term u-d
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += (uArray[offset+j]-uMean)*(dArray[offset+j]-dMean) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0){
+            gaussians[i].cov[2] = sdata[0]/(nParticles-1) ;
+            gaussians[i].cov[6] = gaussians[i].cov[2] ;
+        }
+        __syncthreads() ;
+
+        // covariance term v-d
+        val = 0 ;
+        for(int j = tid ; j < nParticles ; j+=blockDim.x){
+            val += (vArray[offset+j]-vMean)*(dArray[offset+j]-dMean) ;
+        }
+        sumByReduction(sdata,val,tid);
+        if (tid == 0){
+            gaussians[i].cov[5] = sdata[0]/(nParticles-1) ;
+            gaussians[i].cov[7] = gaussians[i].cov[5] ;
+        }
+        __syncthreads() ;
+
+    }
+}
+
+__global__ void
+preUpdateDisparityKernel(Gaussian3D* features_predict,
+                         int n_features,
+                         ImageMeasurement* Z, int n_measure,
+                         Gaussian3D* features_preupdate){
+    int tid = blockIdx.x*blockDim.x + threadIdx.x ;
+    for ( int i = tid ; i < n_features ; i+=gridDim.x*blockDim.x){
+        Gaussian3D feature = features_predict[i] ;
+
+        // innovation covariance
+        REAL sigma[4] ;
+        REAL sigma_inv[4] ;
+        REAL varU = pow(dev_config.stdU,2) ;
+        REAL varV = pow(dev_config.stdV,2) ;
+        sigma[0] = feature.cov[0] + varU ;
+        sigma[1] = feature.cov[1] ;
+        sigma[2] = feature.cov[3] ;
+        sigma[3] = feature.cov[4] + varV ;
+        invert_matrix3(sigma,sigma_inv) ;
+        REAL det_sigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
+
+        REAL K[6] ;
+        K[0] = feature.cov[0]*sigma_inv[0] + feature.cov[3]*sigma_inv[1] ;
+        K[1] = feature.cov[1]*sigma_inv[0] + feature.cov[4]*sigma_inv[1] ;
+        K[2] = feature.cov[2]*sigma_inv[0] + feature.cov[5]*sigma_inv[1] ;
+        K[3] = feature.cov[0]*sigma_inv[2] + feature.cov[3]*sigma_inv[3] ;
+        K[4] = feature.cov[1]*sigma_inv[2] + feature.cov[4]*sigma_inv[3] ;
+        K[5] = feature.cov[2]*sigma_inv[2] + feature.cov[5]*sigma_inv[3] ;
+
+        // Maple-generated code
+        REAL cov_preupdate[9] ;
+        cov_preupdate[0] = (1 - K[0]) * (feature.cov[0] * (1 - K[0]) - feature.cov[3] * K[3]) - K[3] * (feature.cov[1] * (1 - K[0]) - feature.cov[4] * K[3]) + varU *  pow( K[0],  2) + varV *  pow( K[3],  2);
+        cov_preupdate[1] = -K[1] * (feature.cov[0] * (1 - K[0]) - feature.cov[3] * K[3]) + (1 - K[4]) * (feature.cov[1] * (1 - K[0]) - feature.cov[4] * K[3]) + K[0] * varU * K[1] + K[3] * varV * K[4];
+        cov_preupdate[2] = -K[2] * (feature.cov[0] * (1 - K[0]) - feature.cov[3] * K[3]) - K[5] * (feature.cov[1] * (1 - K[0]) - feature.cov[4] * K[3]) + feature.cov[2] * (1 - K[0]) - feature.cov[5] * K[3] + K[0] * varU * K[2] + K[3] * varV * K[5];
+        cov_preupdate[3] = (1 - K[0]) * (-feature.cov[0] * K[1] + feature.cov[3] * (1 - K[4])) - K[3] * (-feature.cov[1] * K[1] + feature.cov[4] * (1 - K[4])) + K[0] * varU * K[1] + K[3] * varV * K[4];
+        cov_preupdate[4] = -K[1] * (-feature.cov[0] * K[1] + feature.cov[3] * (1 - K[4])) + (1 - K[4]) * (-feature.cov[1] * K[1] + feature.cov[4] * (1 - K[4])) + varU *  pow( K[1],  2) + varV *  pow( K[4],  2);
+        cov_preupdate[5] = -K[2] * (-feature.cov[0] * K[1] + feature.cov[3] * (1 - K[4])) - K[5] * (-feature.cov[1] * K[1] + feature.cov[4] * (1 - K[4])) - feature.cov[2] * K[1] + feature.cov[5] * (1 - K[4]) + K[1] * varU * K[2] + K[4] * varV * K[5];
+        cov_preupdate[6] = (1 - K[0]) * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) - K[3] * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) + K[0] * varU * K[2] + K[3] * varV * K[5];
+        cov_preupdate[7] = -K[1] * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) + (1 - K[4]) * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) + K[1] * varU * K[2] + K[4] * varV * K[5];
+        cov_preupdate[8] = -K[2] * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) - K[5] * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) - feature.cov[2] * K[2] - feature.cov[5] * K[5] + feature.cov[8] + varU *  pow( K[2],  2) + varV *  pow( K[5],  2);
+
+        for ( int m = 0 ; m < n_measure ; m++){
+            int preupdate_idx = m*n_features + i ;
+            REAL innov[2] ;
+            innov[0] = Z[m].u - feature.mean[0] ;
+            innov[1] = Z[m].v - feature.mean[1] ;
+
+            REAL dist = innov[0]*innov[0]*sigma_inv[0] +
+                    innov[0]*innov[1]*(sigma_inv[1]+sigma_inv[2]) +
+                    innov[1]*innov[1]*sigma_inv[3] ;
+            REAL log_likelihood = 0.5*dist -
+                    safeLog(2*M_PI) - safeLog(det_sigma) ;
+
+            features_preupdate[preupdate_idx].weight = log_likelihood ;
+            features_preupdate[preupdate_idx].mean[0] = feature.mean[0] +
+                    innov[0]*K[0] + innov[1]*K[3] ;
+            features_preupdate[preupdate_idx].mean[1] = feature.mean[1] +
+                    innov[0]*K[1] + innov[1]*K[4] ;
+            features_preupdate[preupdate_idx].mean[2] = feature.mean[2] +
+                    innov[0]*K[2] + innov[1]*K[5] ;
+            for ( int n = 0 ; n < 9 ; n++ )
+                features_preupdate[preupdate_idx].cov[n] = cov_preupdate[n] ;
+        }
+    }
+}
+
+void
+disparityPredict(DisparitySLAM& slam){
+    host_vector<CameraState> states = slam.states ;
+    int n_states = states.size() ;
+    REAL mean[3] = {0,0,0} ;
+    REAL cov[9] ;
+    cov[0] = pow(config.ax,2) ;
+    cov[4] = pow(config.ay,2) ;
+    cov[8] = pow(config.atheta,2) ;
+    vector<REAL> noisevals(3*n_states) ;
+    randmvn3(mean,cov,n_states,&noisevals[0]);
+    REAL dt = 1.0/15.0 ;
+    for (int i = 0 ; i < n_states ; i++ ){
+        ConstantVelocityState pose = slam.states[i].pose ;
+        pose.px += dt*pose.vx + 0.5*noisevals[3*i]*pow(dt,2) ;
+        pose.py += dt*pose.vy + 0.5*noisevals[3*i+1]*pow(dt,2) ;
+        pose.ptheta += dt*pose.vtheta + 0.5*noisevals[3*i+2]*pow(dt,2) ;
+        pose.vx += dt*noisevals[3*i] ;
+        pose.vy += dt*noisevals[3*i+1] ;
+        pose.vtheta += dt*noisevals[3*i+2] ;
+        slam.states[i].pose = pose ;
+    }
+}
+
+void
+disparityUpdate(DisparitySLAM& slam,
+                std::vector<ImageMeasurement> Z){
+
+    host_vector<ImageMeasurement> measurements = Z ;
+
+    // vector which contains the camera state to which each particle belongs
+    host_vector<int> camera_idx_vector ;
+
+    // vectors to contain concatenated particles
+    host_vector<REAL> x_vector ;
+    host_vector<REAL> y_vector ;
+    host_vector<REAL> z_vector ;
+
+    // vector to contain camera states
+    host_vector<CameraState> camera_vector(slam.states) ;
+//    camera_vector.insert(camera_vector.end(),
+//                         slam.states.begin(),slam.states.end()) ;
+
+    // vector of map sizes
+    host_vector<int> map_offsets(slam.n_particles+1) ;
+    map_offsets[0] = 0 ;
+
+    for ( int n = 0 ; n < slam.n_particles ; n++ ) {
+        ParticleMap map_n = slam.maps[n] ;
+        int n_particles = map_n.x.size() ;
+        map_offsets[n+1] = map_offsets[n] + n_particles/config.particlesPerFeature ;
+        camera_idx_vector.insert(camera_idx_vector.end(),
+                               n_particles,
+                               n) ;
+        x_vector.insert(x_vector.end(),map_n.x.begin(),map_n.x.end()) ;
+        y_vector.insert(y_vector.end(),map_n.y.begin(),map_n.y.end()) ;
+        z_vector.insert(z_vector.end(),map_n.z.begin(),map_n.z.end()) ;
+    }
+
+    // create device vectors
+    int n_particles_total = x_vector.size() ;
+    device_vector<CameraState> dev_camera_vector = camera_vector ;
+    device_vector<int> dev_camera_idx_vector = camera_idx_vector ;
+    device_vector<REAL> dev_x_vector = x_vector ;
+    device_vector<REAL> dev_y_vector = y_vector ;
+    device_vector<REAL> dev_z_vector = z_vector ;
+    device_vector<REAL> dev_u_vector(n_particles_total) ;
+    device_vector<REAL> dev_v_vector(n_particles_total) ;
+    device_vector<REAL> dev_d_vector(n_particles_total) ;
+    device_vector<char> dev_inrange_vector(n_particles_total) ;
+
+
+    // do the transformation
+    thrust::for_each(make_zip_iterator(make_tuple(
+                                   dev_camera_idx_vector.begin(),
+                                   dev_x_vector.begin(),
+                                   dev_y_vector.begin(),
+                                   dev_z_vector.begin(),
+                                   dev_u_vector.begin(),
+                                   dev_v_vector.begin(),
+                                   dev_d_vector.begin(),
+                                   dev_inrange_vector.begin()
+                                   )),
+             make_zip_iterator(make_tuple(
+                                    dev_camera_idx_vector.end(),
+                                    dev_x_vector.end(),
+                                    dev_y_vector.end(),
+                                    dev_z_vector.end(),
+                                    dev_u_vector.end(),
+                                    dev_v_vector.end(),
+                                    dev_d_vector.end(),
+                                    dev_inrange_vector.end()
+                                    )),
+             world_to_disparity_transform(raw_pointer_cast(&dev_camera_vector[0]))) ;
+
+    // generate the keys for grouping particles into features
+    host_vector<int> feature_keys ;
+    int n_features_total = n_particles_total/config.particlesPerFeature ;
+    for ( int n = 0 ; n < n_features_total ; n++ ){
+        feature_keys.insert(feature_keys.end(),config.particlesPerFeature,n) ;
+    }
+
+    // predicate for computing mean over feature particles
+    compute_mean_predicate particle_predicate(config.particlesPerFeature) ;
+
+    // compute pd for each gaussian feature
+    device_vector<int> dev_feature_keys = feature_keys ;
+    device_vector<int> dev_keys_out(n_particles_total) ;
+    device_vector<REAL> dev_pd(n_particles_total) ;
+    reduce_by_key(dev_feature_keys.begin(),dev_feature_keys.end(),
+                  dev_inrange_vector.begin(),
+                  dev_keys_out.begin(),dev_pd.begin(),
+                  particle_predicate) ;
+
+
+    // fit gaussians to particles
+    int n_blocks = min(65535,n_features_total) ;
+    device_vector<Gaussian3D> dev_gaussians(n_features_total) ;
+    fitGaussiansKernel<<<n_blocks,256>>>
+        (raw_pointer_cast(&dev_u_vector[0]),
+         raw_pointer_cast(&dev_v_vector[0]),
+         raw_pointer_cast(&dev_d_vector[0]),
+         n_features_total,
+         raw_pointer_cast(&dev_gaussians[0]) ) ;
+
+    // generate the birth terms
+    int n_measurements = measurements.size() ;
+    host_vector<Gaussian3D> gaussians_birth ;
+    for ( int m = 0 ; m < n_measurements ; m++ ){
+        gaussians_birth[m].mean[0] = measurements[m].u ;
+        gaussians_birth[m].mean[1] = measurements[m].v ;
+        gaussians_birth[m].mean[2] = config.disparityBirth ;
+        gaussians_birth[m].cov[0] = pow(config.stdU,2) ;
+        gaussians_birth[m].cov[4] = pow(config.stdV,2) ;
+        gaussians_birth[m].cov[8] = pow(config.stdDBirth,2) ;
+        gaussians_birth[m].cov[1] = 0 ;
+        gaussians_birth[m].cov[2] = 0 ;
+        gaussians_birth[m].cov[3] = 0 ;
+        gaussians_birth[m].cov[5] = 0 ;
+        gaussians_birth[m].cov[6] = 0 ;
+        gaussians_birth[m].cov[7] = 0 ;
+    }
+    device_vector<Gaussian3D> dev_gaussians_birth = gaussians_birth ;
+    device_vector<ImageMeasurement> dev_measurements = measurements ;
+
+    // do the preupdate
+    device_vector<Gaussian3D> dev_gaussians_preupdate(n_features_total*n_measurements) ;
+    n_blocks = min(65535,n_features_total/256) ;
+    preUpdateDisparityKernel<<<n_blocks,256>>>
+        (raw_pointer_cast(&dev_gaussians[0]),
+        n_features_total,
+        raw_pointer_cast(&dev_measurements[0]),
+        n_measurements,
+        raw_pointer_cast(&dev_gaussians_preupdate[0]));
+
+    // do the sc-phd update
+    device_vector<REAL> dev_weights = slam.weights ;
+    device_vector<int> dev_map_offsets = map_offsets ;
+    int n_update = n_features_total*(n_measurements+1) +
+            slam.n_particles*n_measurements ;
+    device_vector<Gaussian3D> dev_gaussians_update(n_update) ;
+    device_vector<bool> dev_merge_flags(n_update) ;
+    n_blocks = min(slam.n_particles,65535) ;
+    phdUpdateKernel<<<n_blocks,256>>>
+        (raw_pointer_cast(&dev_gaussians[0]),
+         raw_pointer_cast(&dev_pd[0]),
+         raw_pointer_cast(&dev_gaussians_preupdate[0]),
+         raw_pointer_cast(&dev_gaussians_birth[0]),
+         raw_pointer_cast(&dev_map_offsets[0]),
+         slam.n_particles,n_measurements,
+         raw_pointer_cast(&dev_gaussians_update[0]),
+         raw_pointer_cast(&dev_merge_flags[0]),
+         raw_pointer_cast(&dev_weights[0])) ;
+
+    CUDA_SAFE_THREAD_SYNC() ;
+
+    // manually free some device memory
+    dev_gaussians_birth.resize(0);
+    dev_gaussians_birth.shrink_to_fit();
+
+    dev_gaussians.resize(0);
+    dev_gaussians.shrink_to_fit();
+
+    dev_gaussians_preupdate.resize(0);
+    dev_gaussians_preupdate.shrink_to_fit();
+
+    // do the GM-merging
+    device_vector<int> dev_merged_sizes(slam.n_particles) ;
+    device_vector<Gaussian3D> dev_gaussians_merged(n_update) ;
+
+    // recalculate offsets for updated map size
+    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+        map_offsets[n] *= (n_measurements+1) ;
+        map_offsets[n] += n_measurements*n ;
+    }
+    dev_map_offsets = map_offsets ;
+    phdUpdateMergeKernel<<<n_blocks,256>>>
+     (raw_pointer_cast(&dev_gaussians_update[0]),
+      raw_pointer_cast(&dev_gaussians_merged[0]),
+      raw_pointer_cast(&dev_merged_sizes[0]),
+      raw_pointer_cast(&dev_merge_flags[0]),
+      raw_pointer_cast(&dev_map_offsets[0]),
+      slam.n_particles) ;
+    CUDA_SAFE_THREAD_SYNC() ;
+
+    // copy merged gaussians to host, and sample disparity particles
+    host_vector<int> merged_sizes = dev_merged_sizes ;
+    host_vector<REAL> u_vector ;
+    host_vector<REAL> v_vector ;
+    host_vector<REAL> d_vector ;
+    host_vector<Gaussian3D> gaussians_merged = dev_gaussians_merged ;
+    camera_idx_vector.clear();
+    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+        int offset = map_offsets[n] ;
+        int n_merged = merged_sizes[n] ;
+        host_vector<REAL> weights ;
+        camera_idx_vector.insert(camera_idx_vector.end(),
+                               n_merged, n) ;
+        for ( int i = 0 ; i < n_merged ; i++ ){
+            Gaussian3D g = gaussians_merged[offset+i] ;
+            vector<REAL> samples(config.particlesPerFeature) ;
+            randmvn3(g.mean,g.cov,config.particlesPerFeature,&samples[0]);
+            REAL* u_ptr = &samples[0] ;
+            REAL* v_ptr = u_ptr+1 ;
+            REAL* d_ptr = u_ptr+2 ;
+            u_vector.insert(u_vector.end(),
+                            u_ptr, u_ptr+config.particlesPerFeature) ;
+            v_vector.insert(v_vector.end(),
+                            v_ptr, v_ptr+config.particlesPerFeature) ;
+            d_vector.insert(d_vector.end(),
+                            d_ptr, d_ptr+config.particlesPerFeature) ;
+            // save the gaussian weight now
+            weights.push_back(g.weight);
+        }
+        slam.maps[n].weights.assign(weights.begin(),weights.end()) ;
+    }
+
+    // copy disparity particles to device
+    n_particles_total = u_vector.size() ;
+    dev_camera_idx_vector = camera_idx_vector ;
+    dev_u_vector = u_vector ;
+    dev_v_vector = v_vector ;
+    dev_d_vector = d_vector ;
+    dev_x_vector.resize(n_particles_total);
+    dev_y_vector.resize(n_particles_total);
+    dev_z_vector.resize(n_particles_total);
+
+
+    // do the transformation
+    thrust::for_each(make_zip_iterator(make_tuple(
+                                   dev_camera_idx_vector.begin(),
+                                   dev_u_vector.begin(),
+                                   dev_v_vector.begin(),
+                                   dev_d_vector.begin(),
+                                   dev_x_vector.begin(),
+                                   dev_y_vector.begin(),
+                                   dev_z_vector.begin()
+                                   )),
+             make_zip_iterator(make_tuple(
+                                dev_camera_idx_vector.end(),
+                                dev_u_vector.end(),
+                                dev_v_vector.end(),
+                                dev_d_vector.end(),
+                                dev_x_vector.end(),
+                                dev_y_vector.end(),
+                                dev_z_vector.end()
+                                )),
+             disparity_to_world_transform(raw_pointer_cast(&dev_camera_vector[0]))) ;
+
+    // save euclidean particles
+    x_vector = dev_x_vector ;
+    y_vector = dev_y_vector ;
+    z_vector = dev_z_vector ;
+    host_vector<REAL> weights = dev_weights ;
+
+    int offset = 0 ;
+    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+        int n_particles = merged_sizes[n]*config.particlesPerFeature ;
+        slam.maps[n].x.assign(x_vector.begin()+offset,
+                              x_vector.begin()+offset+n_particles) ;
+        slam.maps[n].y.assign(y_vector.begin()+offset,
+                              y_vector.begin()+offset+n_particles) ;
+        slam.maps[n].z.assign(z_vector.begin()+offset,
+                              z_vector.begin()+offset+n_particles) ;
+        offset += n_particles ;
+
+        // update parent particle weights
+        slam.weights[n] += weights[n] ;
+    }
+}
