@@ -187,7 +187,10 @@ typedef struct{
     REAL stdV ;
     REAL disparityBirth ;
     REAL stdDBirth ;
-
+    REAL fx ;
+    REAL fy ;
+    REAL u0 ;
+    REAL v0 ;
 
     int n_particles ;
     int nPredictParticles ;
@@ -233,6 +236,7 @@ typedef struct{
 //typedef vector<PoseParticle> ParticleVector ;
 typedef vector<Gaussian2D> GaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
+typedef vector<ImageMeasurement> imageMeasurementSet ;
 
 class ParticleSLAM{
 public:
@@ -241,8 +245,10 @@ public:
     vector<ConstantVelocityState> states ;
     vector<int> resample_idx ;
 
-    ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n),
+    ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n,-log(n)),
       states(n) {}
+
+    ParticleSLAM copy_particles(vector<int> indices) {return *this ;}
 };
 
 class SynthSLAM : public ParticleSLAM{
@@ -262,6 +268,25 @@ public:
         cardinalities(n),
         cardinality_birth()
     {
+    }
+
+    SynthSLAM copy_particles(vector<int> indices){
+        SynthSLAM new_particles(0) ;
+        new_particles.maps_static.clear();
+        new_particles.maps_dynamic.clear();
+        new_particles.cardinalities.clear();
+        new_particles.weights.clear();
+        new_particles.states.clear();
+        for ( int n = 0 ; n < indices.size() ; n++ ){
+            int i = indices[n] ;
+            new_particles.maps_static.push_back(maps_static[i]);
+            new_particles.maps_dynamic.push_back(maps_dynamic[i]);
+            new_particles.cardinalities.push_back(cardinalities[i]);
+            new_particles.weights.push_back(weights[i]);
+            new_particles.states.push_back(states[i]);
+        }
+        new_particles.resample_idx = indices ;
+        return new_particles ;
     }
 };
 
@@ -309,6 +334,21 @@ public:
     vector<CameraState> states ;
 
     DisparitySLAM(CameraState initial, unsigned int n) : ParticleSLAM(n), maps(n), states(n,initial) {}
+
+    DisparitySLAM copy_particles(vector<int> indices){
+        DisparitySLAM new_particles(states[0],0) ;
+        new_particles.maps.clear();
+        new_particles.weights.clear();
+        new_particles.states.clear();
+        for ( int n = 0 ; n < indices.size() ; n++ ){
+            int i = indices[n] ;
+            new_particles.maps.push_back(maps[i]);
+            new_particles.weights.push_back(weights[i]);
+            new_particles.states.push_back(states[i]);
+        }
+        new_particles.resample_idx = indices ;
+        return new_particles ;
+    }
 };
 
 

@@ -21,10 +21,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-//#include "slamparams.h"
-#include "slamtypes.h"
-#include "phdfilter.h"
-#include "disparity.h"
 #include <cuda.h>
 #include <cutil_inline.h>
 
@@ -34,6 +30,11 @@
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/vector.hpp>
+
+#include "slamtypes.h"
+#include "phdfilter.h"
+#include "disparity.h"
+#include "rng.h"
 
 //#define DEBUG
 
@@ -66,56 +67,72 @@ std::string controls_filename ;
 std::string measurements_time_filename ;
 std::string controls_time_filename ;
 
+// time variables
+time_t rawtime ;
+struct tm *timeinfo ;
+timeval start, stop ;
 char timestamp[80] ;
+REAL current_time = 0 ;
+REAL last_time = 0 ;
 
 template<class Archive>
 void serialize(Archive& ar, ConstantVelocityState& s, const unsigned int version)
 {
-    ar & s.px ;
-    ar & s.py ;
-    ar & s.ptheta ;
-    ar & s.vx ;
-    ar & s.vy ;
-    ar & s.vtheta ;
+    if (version > 0 || version == 0){
+        ar & s.px ;
+        ar & s.py ;
+        ar & s.ptheta ;
+        ar & s.vx ;
+        ar & s.vy ;
+        ar & s.vtheta ;
+    }
 }
 
 template<class Archive>
 void serialize(Archive& ar, RangeBearingMeasurement& z, const unsigned int version)
 {
-    ar & z.range ;
-    ar & z.bearing ;
-    ar & z.label ;
+    if (version > 0 || version == 0){
+        ar & z.range ;
+        ar & z.bearing ;
+        ar & z.label ;
+    }
 }
 
 template<class Archive>
 void serialize(Archive& ar, Gaussian2D& g, const unsigned int version)
 {
-    ar & g.weight ;
-    ar & g.mean ;
-    ar & g.cov ;
+    if (version > 0 || version == 0){
+        ar & g.weight ;
+        ar & g.mean ;
+        ar & g.cov ;
+    }
 }
 
 template<class Archive>
 void serialize(Archive& ar, Gaussian4D& g, const unsigned int version)
 {
-    ar & g.weight ;
-    ar & g.mean ;
-    ar & g.cov ;
+    if (version > 0 || version == 0){
+        ar & g.weight ;
+        ar & g.mean ;
+        ar & g.cov ;
+    }
 }
 
 template<class Archive>
 void serialize(Archive& ar, SynthSLAM& p, const unsigned int version)
 {
-    ar & p.cardinalities ;
-    ar & p.cardinality_birth ;
-    ar & p.maps_dynamic ;
-    ar & p.maps_static ;
-    ar & p.map_estimate_dynamic ;
-    ar & p.map_estimate_static ;
-    ar & p.n_particles ;
-    ar & p.resample_idx ;
-    ar & p.states ;
-    ar & p.weights ;
+    if (version > 0 || version == 0){
+        ar & p.cardinalities ;
+        ar & p.cardinality_birth ;
+        ar & p.maps_dynamic ;
+        ar & p.maps_static ;
+        ar & p.map_estimate_dynamic ;
+        ar & p.map_estimate_static ;
+        ar & p.n_particles ;
+        ar & p.resample_idx ;
+        ar & p.states ;
+        ar & p.weights ;
+    }
 }
 
 vector<REAL> loadTimestamps( string filename )
@@ -163,11 +180,10 @@ vector<AckermanControl> loadControls( string filename )
     return controls ;
 }
 
-measurementSet parseMeasurements(string line)
+void parseMeasurements(string line,measurementSet& v)
 {
     string value ;
     stringstream ss(line, ios_base::in) ;
-    measurementSet v ;
     REAL range, bearing ;
     int label ;
     RangeBearingMeasurement *m ;
@@ -184,14 +200,26 @@ measurementSet parseMeasurements(string line)
     }
     // TODO: sloppily remove the last invalid measurement (results from newline character?)
     v.pop_back() ;
-    return v ;
 }
 
-std::vector<measurementSet> loadMeasurements( std::string filename )
+void parseMeasurements(string line,imageMeasurementSet& set){
+    stringstream ss(line, ios_base::in) ;
+    while( ss.good() )
+    {
+        ImageMeasurement m ;
+        ss >> m.u ;
+        ss >> m.v ;
+        set.push_back(m) ;
+    }
+    // TODO: sloppily remove the last invalid measurement (results from newline character?)
+    set.pop_back() ;
+}
+
+template <typename T>
+void loadMeasurements( std::string filename, vector<T>& allMeasurements )
 {
     string line ;
     fstream measFile(filename.c_str()) ;
-    std::vector<measurementSet> allMeasurements ;
     if (measFile.is_open())
     {
         // skip the header line
@@ -199,19 +227,70 @@ std::vector<measurementSet> loadMeasurements( std::string filename )
         while(measFile.good())
         {
             getline(measFile,line) ;
-            allMeasurements.push_back( parseMeasurements(line) ) ;
+            T measurements ;
+            parseMeasurements(line,measurements);
+            allMeasurements.push_back( measurements ) ;
         }
         allMeasurements.pop_back() ;
         cout << "Loaded " << allMeasurements.size() << " measurements" << endl ;
     }
     else
         cout << "could not open measurements file!" << endl ;
-    return allMeasurements ;
 }
 
 void printMeasurement(RangeBearingMeasurement z)
 {
     cout << z.range <<"\t\t" << z.bearing << endl ;
+}
+
+template <typename T>
+T resampleParticles( T oldParticles, int n_new_particles)
+{
+    if ( n_new_particles < 0 )
+    {
+        n_new_particles = oldParticles.n_particles ;
+    }
+    vector<int> idx_resample(n_new_particles) ;
+    double interval = 1.0/n_new_particles ;
+    double r = randu01() * interval ;
+    double c = exp(oldParticles.weights[0]) ;
+    idx_resample.resize(n_new_particles, 0) ;
+    int i = 0 ;
+    for ( int j = 0 ; j < n_new_particles ; j++ )
+    {
+        r = j*interval + randu01()*interval ;
+        while( r > c )
+        {
+            i++ ;
+            // sometimes the weights don't exactly add up to 1, so i can run
+            // over the indexing bounds. When this happens, find the most highly
+            // weighted particle and fill the rest of the new samples with it
+            if ( i >= oldParticles.n_particles || i < 0 || isnan(i) )
+            {
+                DEBUG_VAL(r) ;
+                DEBUG_VAL(c) ;
+                double max_weight = -1 ;
+                int max_idx = -1 ;
+                for ( int k = 0 ; k < oldParticles.n_particles ; k++ )
+                {
+                    DEBUG_MSG("Warning: particle weights don't add up to 1!s") ;
+                    if ( exp(oldParticles.weights[k]) > max_weight )
+                    {
+                        max_weight = exp(oldParticles.weights[k]) ;
+                        max_idx = k ;
+                    }
+                }
+                i = max_idx ;
+                // set c = 2 so that this while loop is never entered again
+                c = 2 ;
+                break ;
+            }
+            c += exp(oldParticles.weights[i]) ;
+        }
+        idx_resample[j] = i ;
+        r += interval ;
+    }
+    return oldParticles.copy_particles(idx_resample) ;
 }
 
 template <class GaussianType>
@@ -630,6 +709,15 @@ void loadConfig(const char* filename)
             ("std_ay_features", value<REAL>(&config.stdAyMap)->default_value(0), "Std. deviation of y process noise in constant velocity model for targets")
             ("cov_vx_birth", value<REAL>(&config.covVxBirth)->default_value(0), "Birth covariance of x velocity in dynamic targets")
             ("cov_vy_birth", value<REAL>(&config.covVyBirth)->default_value(0), "Birth covariance of y velocity in dynamic targets")
+            ("std_u", value<REAL>(&config.stdU)->default_value(1), "std deviation of measurement noise in u")
+            ("std_v", value<REAL>(&config.stdV)->default_value(1), "std deviation of measurement noise in v")
+            ("disparity_birth", value<REAL>(&config.disparityBirth)->default_value(1000), "birth disparity mean")
+            ("std_d_birth", value<REAL>(&config.stdDBirth)->default_value(300), "birth std. deviation in disparity")
+            ("fx", value<REAL>(&config.fx)->default_value(1000), "focal length divided by x pixel size")
+            ("fy", value<REAL>(&config.fy)->default_value(1000), "focal length divided by y pixel size")
+            ("u0", value<REAL>(&config.u0)->default_value(512), "principal point u coordinate")
+            ("v0", value<REAL>(&config.v0)->default_value(384), "principal point v coordinate")
+            ("particles_per_feature", value<int>(&config.particlesPerFeature)->default_value(100), "number of 3d particles to represent each feature")
             ("tau", value<REAL>(&config.tau)->default_value(0), "Velocity threshold for jump markov transition probability")
             ("beta", value<REAL>(&config.beta)->default_value(1), "Steepness of sigmoid function for computing JMM transition probability")
             ("labeled_measurements", value<bool>(&config.labeledMeasurements)->default_value(false), "Use static/dynamic measurement labels for computing likelihood")
@@ -666,51 +754,11 @@ void loadConfig(const char* filename)
     }
 }
 
-void run_disparity(){
-    CameraState initial_state ;
-    initial_state.fx = 1600 ;
-    initial_state.fy = 1600 ;
-    initial_state.u0 = 400 ;
-    initial_state.v0 = 300 ;
-    DisparitySLAM slam(initial_state,500) ;
-    for ( int k = 0 ; k < 363 ; k++ ){
-        disparityPredict(slam) ;
-    }
-}
-
-int main(int argc, char *argv[])
-{
-    // check cuda device properties
-    int nDevices ;
-    CUDA_SAFE_CALL(cudaGetDeviceCount( &nDevices )) ;
-    cout << "Found " << nDevices << " CUDA Devices" << endl ;
-    cudaDeviceProp props ;
-    CUDA_SAFE_CALL(cudaGetDeviceProperties( &props, 0 )) ;
-    cout << "Device name: " << props.name << endl ;
-    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
-    deviceMemLimit = props.totalGlobalMem*0.95 ;
-    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
-
-    // load the configuration file
-    if ( argc < 2 )
-    {
-        cout << "missing configuration file argument" << endl ;
-        exit(1) ;
-    }
-    DEBUG_MSG("Loading configuration file") ;
-    config_filename = argv[1] ;
-    loadConfig( config_filename.data() ) ;
-    setDeviceConfig( config ) ;
-
-    bool profile_run = (argc > 2) ;
-
-    // time variables
-    time_t rawtime ;
-    struct tm *timeinfo ;
-
+void run_synth(bool profile_run){
+    cout << "running on synthetic data" << endl ;
     // load measurement data
     std::vector<measurementSet> allMeasurements ;
-    allMeasurements = loadMeasurements(measurementsFilename) ;
+    loadMeasurements(measurementsFilename,allMeasurements) ;
     std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
     std::vector<RangeBearingMeasurement>::iterator ii ;
 
@@ -769,21 +817,6 @@ int main(int argc, char *argv[])
             particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
             particles.cardinality_birth[0] = 0 ;
     }
-
-#ifdef DEBUG
-    // make a timestamped directory to store logfiles
-    time( &rawtime ) ;
-    timeinfo = localtime( &rawtime ) ;
-    strftime(timestamp, 80, "%Y%m%d-%H%M%S", timeinfo ) ;
-    mkdir(timestamp, S_IRWXU) ;
-    // copy the configuration file into the log directory
-    string copy_command("cp ") ;
-    copy_command += config_filename ;
-    copy_command += " " ;
-    copy_command += timestamp ;
-    system(copy_command.c_str()) ;
-#endif
-
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
@@ -793,9 +826,6 @@ int main(int argc, char *argv[])
     vector<Gaussian4D> expected_map_dynamic ;
     vector<REAL> cn_estimate ;
     REAL nEff ;
-    timeval start, stop ;
-    REAL current_time = 0 ;
-    REAL last_time = 0 ;
     REAL dt = 0 ;
     int z_idx = 0 ;
     int c_idx = 0 ;
@@ -803,7 +833,6 @@ int main(int argc, char *argv[])
     current_control.alpha = 0 ;
     current_control.v_encoder = 0 ;
     bool do_predict = false ;
-    string logdirname(timestamp) ;
 
     if(!profile_run)
     {
@@ -920,6 +949,7 @@ int main(int argc, char *argv[])
                 particles.resample_idx[i] = i ;
             }
         }
+
         ZPrev = ZZ ;
         gettimeofday( &stop, NULL ) ;
         double elapsed = (stop.tv_sec - start.tv_sec)*1000 ;
@@ -943,8 +973,151 @@ int main(int argc, char *argv[])
         ia >> ZZ ;
         phdUpdate(particles,ZZ) ;
     }
+}
+
+void run_disparity(){
+    cout << "running with image data and disparity measurement model" << endl ;
+    // load measurements
+    vector<imageMeasurementSet> all_measurements ;
+    loadMeasurements(string("data/flea/measurements.txt"),all_measurements) ;
+    int n_steps = all_measurements.size() ;
+
+    // recompute clutter density
+    config.clutterDensity = config.clutterRate/
+            (config.imageHeight*config.imageWidth) ;
+    CameraState initial_state ;
+    ConstantVelocityState expected_pose ;
+    initial_state.pose.px = 0 ;
+    initial_state.pose.py = 0 ;
+    initial_state.pose.ptheta = 0 ;
+    initial_state.pose.vx = 0 ;
+    initial_state.pose.vy = 0 ;
+    initial_state.pose.vtheta = 0 ;
+    initial_state.fx = config.fx ;
+    initial_state.fy = config.fy ;
+    initial_state.u0 = config.u0 ;
+    initial_state.v0 = config.v0 ;
+    DisparitySLAM slam(initial_state,config.n_particles) ;
+    for ( int k = 0 ; k < n_steps ; k++ ){
+        // echo time
+        gettimeofday( &start, NULL ) ;
+        cout << "****** Time Step [" << k << "/" << n_steps << "] ******" << endl ;
+        time( &rawtime ) ;
+        timeinfo = localtime( &rawtime ) ;
+        strftime(timestamp, 80, "%Y%m%d-%H%M%S", timeinfo ) ;
+        cout << timestamp << endl ;
+
+        // no motion from on first measurement
+        if ( k > 0)
+            disparityPredict(slam) ;
+
+        // do measurement update
+        disparityUpdate(slam,all_measurements[k]);
+
+        // resample particles if nEff is below threshold
+        double nEff = 0 ;
+        for ( int i = 0; i < slam.n_particles ; i++)
+            nEff += exp(2*slam.weights[i]) ;
+        nEff = 1.0/nEff/slam.n_particles ;
+        DEBUG_VAL(nEff) ;
+        if (nEff <= config.resampleThresh )
+        {
+            DEBUG_MSG("Resampling particles") ;
+            slam = resampleParticles(slam,config.n_particles) ;
+        }
+        else
+        {
+            for ( int i = 0 ; i < slam.n_particles ; i++ )
+            {
+                slam.resample_idx[i] = i ;
+            }
+        }
+
+
+        if ( isnan(nEff) )
+        {
+            cout << "nan weights detected! exiting..." << endl ;
+            break ;
+        }
+
+        cout << "Extracting SLAM state" << endl ;
+        recoverSlamState(slam, expected_pose ) ;
+
+        gettimeofday( &stop, NULL ) ;
+        double elapsed = (stop.tv_sec - start.tv_sec)*1000 ;
+        elapsed += (stop.tv_usec - start.tv_usec)/1000 ;
+        fstream timeFile("loopTime.log", fstream::out|fstream::app ) ;
+        timeFile << elapsed << endl ;
+        timeFile.close() ;
 
 #ifdef DEBUG
+        DEBUG_MSG( "Writing Log" ) ;
+        writeParticlesMat(slam,k) ;
+#endif
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    // check cuda device properties
+    int nDevices ;
+    CUDA_SAFE_CALL(cudaGetDeviceCount( &nDevices )) ;
+    cout << "Found " << nDevices << " CUDA Devices" << endl ;
+    cudaDeviceProp props ;
+    CUDA_SAFE_CALL(cudaGetDeviceProperties( &props, 0 )) ;
+    cout << "Device name: " << props.name << endl ;
+    cout << "Compute capability: " << props.major << "." << props.minor << endl ;
+    deviceMemLimit = props.totalGlobalMem*0.95 ;
+    cout << "Setting device memory limit to " << deviceMemLimit << " bytes" << endl ;
+
+    // load the configuration file
+    if ( argc < 2 )
+    {
+        cout << "missing configuration file argument" << endl ;
+        exit(1) ;
+    }
+    DEBUG_MSG("Loading configuration file") ;
+    config_filename = argv[1] ;
+    loadConfig( config_filename.data() ) ;
+    setDeviceConfig( config ) ;
+
+    string run_type ;
+    if ( argc >= 3 ){
+        run_type = argv[2] ;
+    }
+    else{
+        run_type = "synth" ;
+    }
+
+    bool profile_run = (argc > 3) ;
+    if (profile_run){
+        cout << "This is a profiling run" << endl ;
+    }
+
+#ifdef DEBUG
+    // make a timestamped directory to store logfiles
+    time( &rawtime ) ;
+    timeinfo = localtime( &rawtime ) ;
+    strftime(timestamp, 80, "%Y%m%d-%H%M%S", timeinfo ) ;
+    mkdir(timestamp, S_IRWXU) ;
+    // copy the configuration file into the log directory
+    string copy_command("cp ") ;
+    copy_command += config_filename ;
+    copy_command += " " ;
+    copy_command += timestamp ;
+    system(copy_command.c_str()) ;
+    string logdirname(timestamp) ;
+#endif
+
+    if (run_type.compare("synth")==0){
+        run_synth(profile_run);
+    }
+    else if(run_type.compare("disparity")==0){
+        run_disparity();
+    }
+
+#ifdef DEBUG
+    // move all generated mat and log files to timestamped directory
     string command("mv *.mat ") ;
     command += logdirname ;
     system( command.c_str() ) ;

@@ -82,7 +82,7 @@ CUDA_SDK = /usr/share/cuda-sdk/C # kermit
 #CUDA_SDK = /opt/cuda/sdk/C
 # Path to cuda toolkit install
 #CUDA_DIR = /usr/cuda/ # for my machines
-CUDA_DIR = /usr/local/cuda # kermit
+CUDA_DIR = /usr/lib/nvidia-cuda-toolkit # kermit
 #CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
 #CUDA_GENCODE = arch=compute_13,code=sm_13

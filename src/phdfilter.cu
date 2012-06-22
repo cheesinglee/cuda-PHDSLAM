@@ -30,6 +30,7 @@
 
 #include "device_math.cuh"
 
+#include <thrust/version.h>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/for_each.h>
@@ -76,8 +77,8 @@ phdPredictVp( SynthSLAM& particles ) ;
 SynthSLAM
 phdUpdate(SynthSLAM& particles, measurementSet measurements) ;
 
-SynthSLAM
-resampleParticles( SynthSLAM oldParticles, int n_particles=-1 ) ;
+template <typename T>
+T resampleParticles(T oldParticles, int n_particles=-1 ) ;
 
 void
 recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
@@ -124,25 +125,27 @@ REAL* dev_cn_clutter ;
 
 /// helper function for outputting a Gaussian to std_out
 template<class GaussianType>
-__host__ __device__ void
+__host__  void
 print_feature(GaussianType f)
 {
     int dims = getGaussianDim(f) ;
-#ifdef __CUDA_ARCH__
-    cuPrintf("%f ",f.weight) ;
-    for ( int i = 0 ; i < dims ; i++ )
-        cuPrintf("%f ",f.mean[i]) ;
-    for ( int i = 0 ; i < dims*dims ; i++ )
-        cuPrintf("%f ",f.cov[i]) ;
-    cuPrintf("\n") ;
-#else
+//#if defined(__CUDA_ARCH__)
+//#warning __CUDA_ARCH__ is defined
+//    cuPrintf("%f ",f.weight) ;
+//    for ( int i = 0 ; i < dims ; i++ )
+//        cuPrintf("%f ",f.mean[i]) ;
+//    for ( int i = 0 ; i < dims*dims ; i++ )
+//        cuPrintf("%f ",f.cov[i]) ;
+//    cuPrintf("\n") ;
+//#else
+//#warning __CUDA_ARCH__ is not defined
     cout << f.weight << " " ;
     for ( int i = 0 ; i < dims ; i++ )
         cout << f.mean[i] << " " ;
     for ( int i = 0 ; i < dims*dims ; i++)
         cout << f.cov[i] << " " ;
     cout << endl ;
-#endif
+//#endif
 }
 
 /// combine all features from all particles into a single STL vector
@@ -1952,7 +1955,7 @@ phdUpdateKernel(GaussianType* features_predict,
                     // save non-detection term
                     int idx_nondetect = update_offset
                             + feature_idx ;
-                    features_update[idx_nondetect] = feature ;
+                    copy_gaussians(feature,features_update[idx_nondetect]) ;
                     features_update[idx_nondetect].weight *= (1-pd) ;
 
                     // save the detection terms
@@ -1963,7 +1966,6 @@ phdUpdateKernel(GaussianType* features_predict,
                                 feature_idx ;
                         copy_gaussians(features_preupdate[preupdate_idx],
                                        features_update[update_idx]) ;
-                        features_update[update_idx] = features_preupdate[preupdate_idx] ;
                     }
 
                     w_partial = pd*feature.weight ;
@@ -1977,7 +1979,8 @@ phdUpdateKernel(GaussianType* features_predict,
 
                     int idx_birth = update_offset + n_features
                             + n_measure*n_features + z_idx ;
-                    features_update[idx_birth] = features_birth[birth_offset+z_idx] ;
+                    copy_gaussians(features_birth[birth_offset+z_idx],
+                                   features_update[idx_birth]) ;
 
                     w_partial = dev_config.birthWeight ;
                 }
@@ -3329,64 +3332,6 @@ phdUpdate(SmcPhdSLAM& slam, measurementSet measurements)
     }
 }
 
-SynthSLAM resampleParticles( SynthSLAM oldParticles, int n_new_particles)
-{
-    if ( n_new_particles < 0 )
-    {
-        n_new_particles = oldParticles.n_particles ;
-    }
-    SynthSLAM newParticles(n_new_particles) ;
-    vector<int> idx_resample(n_new_particles) ;
-    double interval = 1.0/n_new_particles ;
-    double r = randu01() * interval ;
-    double c = exp(oldParticles.weights[0]) ;
-    idx_resample.resize(n_new_particles, 0) ;
-    int i = 0 ;
-//	DEBUG_VAL(interval) ;
-    for ( int j = 0 ; j < n_new_particles ; j++ )
-    {
-        r = j*interval + randu01()*interval ;
-        while( r > c )
-        {
-            i++ ;
-            // sometimes the weights don't exactly add up to 1, so i can run
-            // over the indexing bounds. When this happens, find the most highly
-            // weighted particle and fill the rest of the new samples with it
-            if ( i >= oldParticles.n_particles || i < 0 || isnan(i) )
-            {
-                DEBUG_VAL(r) ;
-                DEBUG_VAL(c) ;
-                double max_weight = -1 ;
-                int max_idx = -1 ;
-                for ( int k = 0 ; k < oldParticles.n_particles ; k++ )
-                {
-                    DEBUG_MSG("Warning: particle weights don't add up to 1!s") ;
-                    if ( exp(oldParticles.weights[k]) > max_weight )
-                    {
-                        max_weight = exp(oldParticles.weights[k]) ;
-                        max_idx = k ;
-                    }
-                }
-                i = max_idx ;
-                // set c = 2 so that this while loop is never entered again
-                c = 2 ;
-                break ;
-            }
-            c += exp(oldParticles.weights[i]) ;
-        }
-//		DEBUG_VAL(i) ;
-        newParticles.weights[j] = safeLog(interval) ;
-        newParticles.states[j] = oldParticles.states[i] ;
-        newParticles.maps_static[j] = oldParticles.maps_static[i] ;
-        newParticles.maps_dynamic[j] = oldParticles.maps_dynamic[i] ;
-        newParticles.cardinalities[j] = oldParticles.cardinalities[i] ;
-        idx_resample[j] = i ;
-//        r += interval ;
-    }
-    newParticles.resample_idx = idx_resample ;
-    return newParticles ;
-}
-
 template <class GaussianType>
 vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
                                         vector<REAL> weights)
@@ -3623,7 +3568,8 @@ setDeviceConfig( const SlamConfig& config )
 }
 
 //--- explicitly instantiate templates so linking works correctly
-
+SynthSLAM resampleParticles(SynthSLAM slam,int n) ;
+DisparitySLAM resampleParticles(DisparitySLAM slam,int n) ;
 //--- End template specialization
 
 ///////////////////////////////////////////////////////////////////
@@ -3938,6 +3884,7 @@ preUpdateDisparityKernel(Gaussian3D* features_predict,
 
 void
 disparityPredict(DisparitySLAM& slam){
+    DEBUG_MSG("Performing prediction") ;
     host_vector<CameraState> states = slam.states ;
     int n_states = states.size() ;
     REAL mean[3] = {0,0,0} ;
@@ -4009,6 +3956,7 @@ disparityUpdate(DisparitySLAM& slam,
 
 
     // do the transformation
+    DEBUG_MSG("Performing world to disparity transformation") ;
     thrust::for_each(make_zip_iterator(make_tuple(
                                    dev_camera_idx_vector.begin(),
                                    dev_x_vector.begin(),
@@ -4042,6 +3990,7 @@ disparityUpdate(DisparitySLAM& slam,
     compute_mean_predicate particle_predicate(config.particlesPerFeature) ;
 
     // compute pd for each gaussian feature
+    DEBUG_MSG("Computing Pd") ;
     device_vector<int> dev_feature_keys = feature_keys ;
     device_vector<int> dev_keys_out(n_particles_total) ;
     device_vector<REAL> dev_pd(n_particles_total) ;
@@ -4052,6 +4001,7 @@ disparityUpdate(DisparitySLAM& slam,
 
 
     // fit gaussians to particles
+    DEBUG_MSG("Fitting gaussians to disparity space particles") ;
     int n_blocks = min(65535,n_features_total) ;
     device_vector<Gaussian3D> dev_gaussians(n_features_total) ;
     fitGaussiansKernel<<<n_blocks,256>>>
@@ -4062,9 +4012,11 @@ disparityUpdate(DisparitySLAM& slam,
          raw_pointer_cast(&dev_gaussians[0]) ) ;
 
     // generate the birth terms
+    DEBUG_MSG("Generating birth terms from measurements") ;
     int n_measurements = measurements.size() ;
-    host_vector<Gaussian3D> gaussians_birth ;
+    host_vector<Gaussian3D> gaussians_birth(n_measurements) ;
     for ( int m = 0 ; m < n_measurements ; m++ ){
+        gaussians_birth[m].weight = safeLog(config.birthWeight) ;
         gaussians_birth[m].mean[0] = measurements[m].u ;
         gaussians_birth[m].mean[1] = measurements[m].v ;
         gaussians_birth[m].mean[2] = config.disparityBirth ;
@@ -4077,28 +4029,38 @@ disparityUpdate(DisparitySLAM& slam,
         gaussians_birth[m].cov[5] = 0 ;
         gaussians_birth[m].cov[6] = 0 ;
         gaussians_birth[m].cov[7] = 0 ;
+        print_feature(gaussians_birth[m]) ;
     }
     device_vector<Gaussian3D> dev_gaussians_birth = gaussians_birth ;
     device_vector<ImageMeasurement> dev_measurements = measurements ;
 
     // do the preupdate
     device_vector<Gaussian3D> dev_gaussians_preupdate(n_features_total*n_measurements) ;
-    n_blocks = min(65535,n_features_total/256) ;
-    preUpdateDisparityKernel<<<n_blocks,256>>>
-        (raw_pointer_cast(&dev_gaussians[0]),
-        n_features_total,
-        raw_pointer_cast(&dev_measurements[0]),
-        n_measurements,
-        raw_pointer_cast(&dev_gaussians_preupdate[0]));
+    if (dev_gaussians_preupdate.size() > 0){
+        DEBUG_MSG("Computing disparity pre-update") ;
+        n_blocks = min(65535,n_features_total/256) ;
+        preUpdateDisparityKernel<<<n_blocks,256>>>
+            (raw_pointer_cast(&dev_gaussians[0]),
+            n_features_total,
+            raw_pointer_cast(&dev_measurements[0]),
+            n_measurements,
+            raw_pointer_cast(&dev_gaussians_preupdate[0]));
+    }
 
     // do the sc-phd update
-    device_vector<REAL> dev_weights = slam.weights ;
+    DEBUG_MSG("copy particle weights to device") ;
+    device_vector<REAL> dev_weights(slam.n_particles) ;
+    DEBUG_MSG("copy map offsets to device") ;
     device_vector<int> dev_map_offsets = map_offsets ;
     int n_update = n_features_total*(n_measurements+1) +
             slam.n_particles*n_measurements ;
+    DEBUG_VAL(n_update) ;
+    DEBUG_MSG("allocate device memory for updated gaussians") ;
     device_vector<Gaussian3D> dev_gaussians_update(n_update) ;
+    DEBUG_MSG("allocate device memory for merging flags") ;
     device_vector<bool> dev_merge_flags(n_update) ;
     n_blocks = min(slam.n_particles,65535) ;
+    DEBUG_MSG("Performing SC-PHD update") ;
     phdUpdateKernel<<<n_blocks,256>>>
         (raw_pointer_cast(&dev_gaussians[0]),
          raw_pointer_cast(&dev_pd[0]),
@@ -4132,6 +4094,8 @@ disparityUpdate(DisparitySLAM& slam,
         map_offsets[n] += n_measurements*n ;
     }
     dev_map_offsets = map_offsets ;
+
+    DEBUG_MSG("Performing GM reduction") ;
     phdUpdateMergeKernel<<<n_blocks,256>>>
      (raw_pointer_cast(&dev_gaussians_update[0]),
       raw_pointer_cast(&dev_gaussians_merged[0]),
@@ -4142,6 +4106,7 @@ disparityUpdate(DisparitySLAM& slam,
     CUDA_SAFE_THREAD_SYNC() ;
 
     // copy merged gaussians to host, and sample disparity particles
+    DEBUG_MSG("Sampling disparity space particles") ;
     host_vector<int> merged_sizes = dev_merged_sizes ;
     host_vector<REAL> u_vector ;
     host_vector<REAL> v_vector ;
@@ -4183,8 +4148,11 @@ disparityUpdate(DisparitySLAM& slam,
     dev_y_vector.resize(n_particles_total);
     dev_z_vector.resize(n_particles_total);
 
+    for (int n = 0 ; n < u_vector.size() ; n++ )
+        DEBUG_VAL(u_vector[n]) ;
 
     // do the transformation
+    DEBUG_MSG("Computing disparity to world transformation") ;
     thrust::for_each(make_zip_iterator(make_tuple(
                                    dev_camera_idx_vector.begin(),
                                    dev_u_vector.begin(),
@@ -4206,6 +4174,7 @@ disparityUpdate(DisparitySLAM& slam,
              disparity_to_world_transform(raw_pointer_cast(&dev_camera_vector[0]))) ;
 
     // save euclidean particles
+    DEBUG_MSG("Saving updated 3D particles") ;
     x_vector = dev_x_vector ;
     y_vector = dev_y_vector ;
     z_vector = dev_z_vector ;

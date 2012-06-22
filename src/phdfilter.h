@@ -20,8 +20,8 @@ phdPredictVp( SynthSLAM& particles ) ;
 SynthSLAM
 phdUpdate(SynthSLAM& particles, measurementSet measurements) ;
 
-SynthSLAM
-resampleParticles( SynthSLAM oldParticles, int n_particles=-1 ) ;
+template <typename T>
+T resampleParticles( T oldParticles, int n_new_particles) ;
 
 void
 recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
