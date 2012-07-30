@@ -227,7 +227,7 @@ computeMahalDist(Gaussian3D a, Gaussian3D b)
     REAL sigma[9] ;
     for (int i = 0 ; i <9 ; i++)
         sigma[i] = (a.cov[i] + b.cov[i])/2 ;
-    invert_matrix2(sigma,sigma_inv);
+    invert_matrix3(sigma,sigma_inv);
     REAL innov[3] ;
     innov[0] = a.mean[0] - b.mean[0] ;
     innov[1] = a.mean[1] - b.mean[1] ;

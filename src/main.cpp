@@ -74,6 +74,7 @@ timeval start, stop ;
 char timestamp[80] ;
 REAL current_time = 0 ;
 REAL last_time = 0 ;
+int n_steps = -1 ;
 
 template<class Archive>
 void serialize(Archive& ar, ConstantVelocityState& s, const unsigned int version)
@@ -211,8 +212,6 @@ void parseMeasurements(string line,imageMeasurementSet& set){
         ss >> m.v ;
         set.push_back(m) ;
     }
-    // TODO: sloppily remove the last invalid measurement (results from newline character?)
-    set.pop_back() ;
 }
 
 template <typename T>
@@ -334,18 +333,24 @@ void write_map_mat( vector<ParticleMap> maps, mxArray*& ptr_maps)
 {
     mwSize n_particles = maps.size() ;
     mxArray* ptr_particles = NULL ;
+    mxArray* ptr_weights = NULL ;
     for ( unsigned int p = 0 ; p < n_particles ; p++ )
     {
+        DEBUG_VAL(p) ;
         ParticleMap map = maps[p] ;
         mwSize n_features = map.x.size()/config.particlesPerFeature ;
         mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
         ptr_particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
+        ptr_weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
+        DEBUG_VAL(n_features) ;
         if ( n_features > 0 )
         {
             mwSize outer_stride = config.particlesPerFeature*3 ;
             mwSize inner_stride = 3 ;
             for ( int i = 0 ; i < n_features ; i++ ){
+//                DEBUG_VAL(i) ;
                 for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+//                    DEBUG_VAL(j) ;
                     mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride] =
                             map.x[i*config.particlesPerFeature+j] ;
                     mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+1] =
@@ -353,9 +358,11 @@ void write_map_mat( vector<ParticleMap> maps, mxArray*& ptr_maps)
                     mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+2] =
                             map.z[i*config.particlesPerFeature+j] ;
                 }
+                mxGetPr(ptr_weights)[i] = map.weights[i] ;
             }
+            mxSetFieldByNumber(ptr_maps,p,1,ptr_weights);
+            mxSetFieldByNumber(ptr_maps,p,0,ptr_particles);
         }
-        mxSetCell(ptr_maps,p,ptr_particles);
     }
 }
 
@@ -420,15 +427,10 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
                                             "maps_dynamic","resample_idx"} ;
 //        DEBUG_MSG("mxCreateStructMatrix") ;
         mxArray* mxParticles = mxCreateStructMatrix(1,1,5,particleFieldNames) ;
-//        DEBUG_MSG("states") ;
         mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
-//        DEBUG_MSG("weights") ;
         mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
-//        DEBUG_MSG("maps_static") ;
         mxSetFieldByNumber( mxParticles, 0, 2, maps_static ) ;
-//        DEBUG_MSG("maps_dynamic") ;
         mxSetFieldByNumber( mxParticles, 0, 3, maps_dynamic ) ;
-//        DEBUG_MSG("resample_idx") ;
         mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
 
         // write to mat file
@@ -454,9 +456,9 @@ writeParticlesMat(DisparitySLAM particles, int t = -1,
         std::string matfilename = oss.str() ;
 
         // load particle states, weights, and resample indices into mxArrays
-//        DEBUG_MSG("states,weights,resample_idx") ;
+        DEBUG_MSG("states,weights,resample_idx") ;
         mwSize nParticles = particles.n_particles ;
-        mxArray* states = mxCreateNumericMatrix(6,nParticles,
+        mxArray* states = mxCreateNumericMatrix(12,nParticles,
                                                 mxDOUBLE_CLASS,mxREAL) ;
         mxArray* weights = mxCreateNumericMatrix(nParticles,1,
                                                  mxDOUBLE_CLASS,mxREAL) ;
@@ -468,35 +470,68 @@ writeParticlesMat(DisparitySLAM particles, int t = -1,
         {
             mxGetPr(states)[i+0] = particles.states[p].pose.px ;
             mxGetPr(states)[i+1] = particles.states[p].pose.py ;
-            mxGetPr(states)[i+2] = particles.states[p].pose.ptheta ;
-            mxGetPr(states)[i+3] = particles.states[p].pose.vx ;
-            mxGetPr(states)[i+4] = particles.states[p].pose.vy ;
-            mxGetPr(states)[i+5] = particles.states[p].pose.vtheta ;
+            mxGetPr(states)[i+2] = particles.states[p].pose.pz ;
+            mxGetPr(states)[i+3] = particles.states[p].pose.proll ;
+            mxGetPr(states)[i+4] = particles.states[p].pose.ppitch ;
+            mxGetPr(states)[i+5] = particles.states[p].pose.pyaw ;
+            mxGetPr(states)[i+6] = particles.states[p].pose.vx ;
+            mxGetPr(states)[i+7] = particles.states[p].pose.vy ;
+            mxGetPr(states)[i+8] = particles.states[p].pose.vz ;
+            mxGetPr(states)[i+9] = particles.states[p].pose.vroll ;
+            mxGetPr(states)[i+10] = particles.states[p].pose.vpitch ;
+            mxGetPr(states)[i+11] = particles.states[p].pose.vyaw ;
             mxGetPr(weights)[p] = particles.weights[p] ;
             ptr_resample[p] = particles.resample_idx[p] ;
-            i+=6 ;
+            i+=12 ;
         }
 
         // copy maps to mxarray
-//        DEBUG_MSG("copy maps") ;
-        mxArray* maps = mxCreateCellMatrix(1,nParticles) ;
+        DEBUG_MSG("copy maps") ;
+        const char* field_names[] = {"particles","weights"} ;
+        mxArray* maps = mxCreateStructMatrix(nParticles,1,2,field_names) ;
         if(config.saveAllMaps)
         {
             write_map_mat( particles.maps, maps ) ;
         }
         else
         {
-            vector<ParticleMap > tmp_map_vector ;
-            tmp_map_vector.push_back( particles.map_estimate ) ;
-            write_map_mat( tmp_map_vector, maps ) ;
+            maps = mxCreateStructMatrix(1,1,2,field_names) ;
+
+            ParticleMap map = particles.map_estimate ;
+            mwSize n_features = map.x.size()/config.particlesPerFeature ;
+            mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
+            mxArray* particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
+            mxArray* weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
+
+            mwSize outer_stride = config.particlesPerFeature*3 ;
+            mwSize inner_stride = 3 ;
+            for ( int i = 0 ; i < n_features ; i++ ){
+                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+                    mxGetPr(particles)[i*outer_stride+j*inner_stride] =
+                            map.x[i*config.particlesPerFeature+j] ;
+                    mxGetPr(particles)[i*outer_stride+j*inner_stride+1] =
+                            map.y[i*config.particlesPerFeature+j] ;
+                    mxGetPr(particles)[i*outer_stride+j*inner_stride+2] =
+                            map.z[i*config.particlesPerFeature+j] ;
+                 }
+                mxGetPr(weights)[i] = map.weights[i] ;
+            }
+//            for ( int i = 0; i < n_features ; i++ ){
+//                DEBUG_VAL(mxGetPr(weights)[i]) ;
+//            }
+
+            DEBUG_MSG("setfield particles") ;
+            mxSetFieldByNumber(maps,0,0,particles);
+            DEBUG_MSG("setfield weights") ;
+            mxSetFieldByNumber(maps,0,1,weights);
         }
 
         // assemble final mat-file structure
-//        DEBUG_MSG("assemble mat-file") ;
+        DEBUG_MSG("assemble mat-file") ;
         const char* particleFieldNames[] = {"states","weights","maps",
                                             "resample_idx"} ;
 //        DEBUG_MSG("mxCreateStructMatrix") ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,5,particleFieldNames) ;
+        mxArray* mxParticles = mxCreateStructMatrix(1,1,4,particleFieldNames) ;
 //        DEBUG_MSG("states") ;
         mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
 //        DEBUG_MSG("weights") ;
@@ -504,7 +539,7 @@ writeParticlesMat(DisparitySLAM particles, int t = -1,
 //        DEBUG_MSG("maps_static") ;
         mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
 //        DEBUG_MSG("resample_idx") ;
-        mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
+        mxSetFieldByNumber( mxParticles, 0, 3, resample_idx ) ;
 
         // write to mat file
         DEBUG_MSG("Write to mat-file") ;
@@ -655,6 +690,7 @@ void loadConfig(const char* filename)
     using namespace boost::program_options ;
     options_description desc("SLAM filter config") ;
     desc.add_options()
+            ("debug", value<bool>(&config.debug)->default_value(false),"extra debug output")
             ("initial_x", value<REAL>(&config.x0)->default_value(30), "Initial x position")
             ("initial_y", value<REAL>(&config.y0)->default_value(5), "Initial y position")
             ("initial_theta", value<REAL>(&config.theta0)->default_value(0), "Initial heading")
@@ -664,7 +700,10 @@ void loadConfig(const char* filename)
             ("motion_type", value<int>(&config.motionType)->default_value(1), "0 = Constant Velocity, 1 = Ackerman steering")
             ("acc_x", value<REAL>(&config.ax)->default_value(0.5), "Standard deviation of x acceleration")
             ("acc_y", value<REAL>(&config.ay)->default_value(0), "Standard deviation of y acceleration")
-            ("acc_theta", value<REAL>(&config.atheta)->default_value(0.0087), "Standard deviation of theta acceleration")
+            ("acc_z", value<REAL>(&config.az)->default_value(0), "Standard deviation of z acceleration")
+            ("acc_roll", value<REAL>(&config.aroll)->default_value(0.0087), "Standard deviation of roll acceleration")
+            ("acc_pitch", value<REAL>(&config.apitch)->default_value(0.0087), "Standard deviation of pitch acceleration")
+            ("acc_yaw", value<REAL>(&config.ayaw)->default_value(0.0087), "Standard deviation of yaw acceleration")
             ("dt", value<REAL>(&config.dt)->default_value(0.1), "Duration of each timestep")
             ("max_bearing", value<REAL>(&config.maxBearing)->default_value(M_PI), "Maximum sensor bearing")
             ("min_range", value<REAL>(&config.minRange)->default_value(0), "Minimum sensor range")
@@ -712,6 +751,8 @@ void loadConfig(const char* filename)
             ("std_u", value<REAL>(&config.stdU)->default_value(1), "std deviation of measurement noise in u")
             ("std_v", value<REAL>(&config.stdV)->default_value(1), "std deviation of measurement noise in v")
             ("disparity_birth", value<REAL>(&config.disparityBirth)->default_value(1000), "birth disparity mean")
+            ("image_width", value<int>(&config.imageWidth)->default_value(600), "image width in pixels")
+            ("image_height", value<int>(&config.imageHeight)->default_value(480), "image width in pixels")
             ("std_d_birth", value<REAL>(&config.stdDBirth)->default_value(300), "birth std. deviation in disparity")
             ("fx", value<REAL>(&config.fx)->default_value(1000), "focal length divided by x pixel size")
             ("fy", value<REAL>(&config.fy)->default_value(1000), "focal length divided by y pixel size")
@@ -728,6 +769,7 @@ void loadConfig(const char* filename)
             ("max_time_steps", value<int>(&config.maxSteps)->default_value(10000), "Limit the number of time steps to execute")
             ("save_all_maps", value<bool>(&config.saveAllMaps)->default_value(false), "Save all particle maps")
             ("save_prediction", value<bool>(&config.savePrediction)->default_value(false), "Save the predicted state to the log files")
+            ("n_steps",value<int>(&n_steps)->default_value(-1),"Number of simulation steps; if less than zero, equal to number of sensor inputs")
             ;
     ifstream ifs( filename ) ;
     if ( !ifs )
@@ -812,11 +854,11 @@ void run_synth(bool profile_run){
         }
     }
 
-    if ( config.filterType == CPHD_TYPE )
-    {
-            particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
-            particles.cardinality_birth[0] = 0 ;
-    }
+//    if ( config.filterType == CPHD_TYPE )
+//    {
+//            particles.cardinality_birth.assign( config.maxCardinality+1, LOG0 ) ;
+//            particles.cardinality_birth[0] = 0 ;
+//    }
     // do the simulation
     measurementSet ZZ ;
     measurementSet ZPrev ;
@@ -837,11 +879,11 @@ void run_synth(bool profile_run){
     if(!profile_run)
     {
     cout << "STARTING SIMULATION" << endl ;
-    if ( config.filterType == CPHD_TYPE )
-    {
-        DEBUG_MSG("Initializing CPHD constants") ;
-        initCphdConstants() ;
-    }
+//    if ( config.filterType == CPHD_TYPE )
+//    {
+//        DEBUG_MSG("Initializing CPHD constants") ;
+//        initCphdConstants() ;
+//    }
 
     for (int n = 0 ; n < nSteps ; n++ )
     {
@@ -922,7 +964,7 @@ void run_synth(bool profile_run){
                 oa << ZZ ;
             }
             cout << "Performing PHD Update" << endl ;
-            particlesPreMerge = phdUpdate(particles, ZZ) ;
+            particlesPreMerge = phdUpdateSynth(particles, ZZ) ;
         }
         cout << "Extracting SLAM state" << endl ;
         recoverSlamState(particles, expectedPose, cn_estimate ) ;
@@ -971,7 +1013,7 @@ void run_synth(bool profile_run){
         boost::archive::binary_iarchive ia(ifs) ;
         ia >> particles ;
         ia >> ZZ ;
-        phdUpdate(particles,ZZ) ;
+        phdUpdateSynth(particles,ZZ) ;
     }
 }
 
@@ -980,24 +1022,39 @@ void run_disparity(){
     // load measurements
     vector<imageMeasurementSet> all_measurements ;
     loadMeasurements(string("data/flea/measurements.txt"),all_measurements) ;
-    int n_steps = all_measurements.size() ;
+    if(n_steps < 0 )
+        n_steps = all_measurements.size() ;
 
     // recompute clutter density
     config.clutterDensity = config.clutterRate/
             (config.imageHeight*config.imageWidth) ;
+    setDeviceConfig( config ) ;
+
     CameraState initial_state ;
-    ConstantVelocityState expected_pose ;
+    ConstantVelocityState3D expected_pose ;
     initial_state.pose.px = 0 ;
     initial_state.pose.py = 0 ;
-    initial_state.pose.ptheta = 0 ;
-    initial_state.pose.vx = 0 ;
+    initial_state.pose.pz = 0 ;
+    initial_state.pose.proll = 0;
+    initial_state.pose.ppitch = 0 ;
+    initial_state.pose.pyaw  = 0 ;
+    initial_state.pose.vx =  0 ;
     initial_state.pose.vy = 0 ;
-    initial_state.pose.vtheta = 0 ;
+    initial_state.pose.vroll = 0 ;
+    initial_state.pose.vpitch = 0;
+    initial_state.pose.vyaw = 0 ;
     initial_state.fx = config.fx ;
     initial_state.fy = config.fy ;
     initial_state.u0 = config.u0 ;
     initial_state.v0 = config.v0 ;
     DisparitySLAM slam(initial_state,config.n_particles) ;
+
+    // initialize roll and yaw to be normally distributed, zero mean, ±5 deg
+    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+        slam.states[n].pose.proll = initial_state.pose.proll + randn()*0.03 ;
+        slam.states[n].pose.pyaw = initial_state.pose.ppitch + randn()*0.03 ;
+    }
+
     for ( int k = 0 ; k < n_steps ; k++ ){
         // echo time
         gettimeofday( &start, NULL ) ;
@@ -1014,6 +1071,12 @@ void run_disparity(){
         // do measurement update
         disparityUpdate(slam,all_measurements[k]);
 
+
+#ifdef DEBUG
+        DEBUG_MSG( "Writing Log" ) ;
+        writeParticlesMat(slam,k) ;
+#endif
+
         // resample particles if nEff is below threshold
         double nEff = 0 ;
         for ( int i = 0; i < slam.n_particles ; i++)
@@ -1023,7 +1086,9 @@ void run_disparity(){
         if (nEff <= config.resampleThresh )
         {
             DEBUG_MSG("Resampling particles") ;
+            DEBUG_VAL(slam.n_particles) ;
             slam = resampleParticles(slam,config.n_particles) ;
+            DEBUG_VAL(slam.n_particles) ;
         }
         else
         {
@@ -1049,11 +1114,6 @@ void run_disparity(){
         fstream timeFile("loopTime.log", fstream::out|fstream::app ) ;
         timeFile << elapsed << endl ;
         timeFile.close() ;
-
-#ifdef DEBUG
-        DEBUG_MSG( "Writing Log" ) ;
-        writeParticlesMat(slam,k) ;
-#endif
     }
 }
 

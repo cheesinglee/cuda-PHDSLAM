@@ -49,8 +49,8 @@ void randmvn3(double* mean, double* cov, int n, double* results){
         double x1 = randn() ;
         double x2 = randn() ;
         double x3 = randn() ;
-        results[i*3] = x1*L11 + mean[0];
-        results[i*3+1] = x1*L21 + x2*L22 + mean[1] ;
-        results[i*3+2] = x1*L31 + x2*L32 + x3*L33 + mean[2] ;
+        results[i] = x1*L11 + mean[0];
+        results[i+n] = x1*L21 + x2*L22 + mean[1] ;
+        results[i+2*n] = x1*L31 + x2*L32 + x3*L33 + mean[2] ;
     }
 }

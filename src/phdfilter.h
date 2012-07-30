@@ -4,8 +4,8 @@
 #ifdef __cplusplus
 
 //--- Make kernel helper functions externally visible to C++ code
-void
-initCphdConstants() ;
+//void
+//initCphdConstants() ;
 
 void
 predictMap(SynthSLAM& p) ;
@@ -13,22 +13,19 @@ predictMap(SynthSLAM& p) ;
 void
 phdPredict(SynthSLAM& particles, ... ) ;
 
-template<class GaussianType>
-void
-phdPredictVp( SynthSLAM& particles ) ;
+//template<class GaussianType>
+//void
+//phdPredictVp( SynthSLAM& particles ) ;
 
 SynthSLAM
-phdUpdate(SynthSLAM& particles, measurementSet measurements) ;
-
-template <typename T>
-T resampleParticles( T oldParticles, int n_new_particles) ;
+phdUpdateSynth(SynthSLAM& particles, measurementSet measurements) ;
 
 void
 recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
         vector<REAL>& cn_estimate ) ;
 
 void
-recoverSlamState(DisparitySLAM& particles, ConstantVelocityState& expectedPose ) ;
+recoverSlamState(DisparitySLAM& particles, ConstantVelocityState3D& expectedPose ) ;
 
 void
 setDeviceConfig( const SlamConfig& config ) ;

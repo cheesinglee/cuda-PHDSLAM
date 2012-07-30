@@ -48,6 +48,22 @@ typedef struct{
 	REAL vtheta ;
 } ConstantVelocityState ;
 
+// constant velocity kinematic state
+typedef struct{
+    REAL px ;
+    REAL py ;
+    REAL pz ;
+    REAL proll ;
+    REAL ppitch ;
+    REAL pyaw ;
+    REAL vx ;
+    REAL vy ;
+    REAL vz ;
+    REAL vroll ;
+    REAL vpitch ;
+    REAL vyaw ;
+} ConstantVelocityState3D ;
+
 // constant velocity process noise
 typedef struct{
 	REAL ax ;
@@ -120,24 +136,10 @@ typedef struct {
     REAL weight ;
 } Gaussian4D ;
 
-//typedef struct{
-//    REAL* cov00 ;
-//    REAL* cov01 ;
-//    REAL* cov11 ;
-//    REAL* mean0 ;
-//    REAL* mean1 ;
-//    REAL* weight ;
-//} GaussianMixture2D ;
-
-//typedef struct{
-//	REAL* weights ;
-//	REAL* x ;
-//	REAL* y ;
-//	int n_particles ;
-//} ParticleMixture ;
-
 
 typedef struct{
+    bool debug ;
+
     // initial state
     REAL x0 ;
     REAL y0 ;
@@ -149,7 +151,10 @@ typedef struct{
     // constant velocity process noise
     REAL ax ;
     REAL ay ;
-    REAL atheta ;
+    REAL az ;
+    REAL aroll ;
+    REAL apitch ;
+    REAL ayaw ;
     REAL dt ;
     REAL minRange ;
     REAL maxRange ;
@@ -233,6 +238,24 @@ typedef struct{
     bool savePrediction ;
 } SlamConfig ;
 
+template <class StateType>
+class FollowPathMotionModel{
+public:
+    vector<StateType> traj ;
+    int counter ;
+    FollowPathMotionModel(vector<StateType> traj_init){
+        traj = traj_init ;
+        counter = 0 ;
+    }
+
+    StateType compute_motion(){
+        if (counter < traj.size())
+            return traj[counter++] ;
+        else
+            return traj.back() ;
+    }
+};
+
 //typedef vector<PoseParticle> ParticleVector ;
 typedef vector<Gaussian2D> GaussianMixture ;
 typedef vector<RangeBearingMeasurement> measurementSet ;
@@ -246,7 +269,7 @@ public:
     vector<int> resample_idx ;
 
     ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n,-log(n)),
-      states(n) {}
+        states(n),resample_idx(n) {}
 
     ParticleSLAM copy_particles(vector<int> indices) {return *this ;}
 };
@@ -271,7 +294,7 @@ public:
     }
 
     SynthSLAM copy_particles(vector<int> indices){
-        SynthSLAM new_particles(0) ;
+        SynthSLAM new_particles(indices.size()) ;
         new_particles.maps_static.clear();
         new_particles.maps_dynamic.clear();
         new_particles.cardinalities.clear();
@@ -282,7 +305,7 @@ public:
             new_particles.maps_static.push_back(maps_static[i]);
             new_particles.maps_dynamic.push_back(maps_dynamic[i]);
             new_particles.cardinalities.push_back(cardinalities[i]);
-            new_particles.weights.push_back(weights[i]);
+            new_particles.weights.push_back(-log(new_particles.n_particles));
             new_particles.states.push_back(states[i]);
         }
         new_particles.resample_idx = indices ;
@@ -311,9 +334,8 @@ public:
 };
 
 
-
 typedef struct{
-    ConstantVelocityState pose ;
+    ConstantVelocityState3D pose ;
     REAL fx ;
     REAL fy ;
     REAL u0 ;
@@ -325,6 +347,32 @@ typedef struct{
     vector<REAL> y ;
     vector<REAL> z ;
     vector<REAL> weights ;
+
+    /**
+     * @brief print print particles to stdout in a MATLAB-friendly format
+     */
+    void print(){
+        std::cout << "weights = [" ;
+        for ( int i = 0; i < weights.size() ; i++ ){
+            if (i > 0){
+                std::cout << "," ;
+            }
+            std::cout << weights[i] ;
+            if ( i > 0 && i % 16 == 0){
+                std::cout << std::endl ;
+            }
+        }
+        std::cout << "];" << std::endl ;
+
+        std::cout << "particles = [" ;
+        for ( int i = 0 ; i < x.size() ; i++ ){
+            std::cout << x[i] << "," << y[i] << "," << z[i] ;
+            if (i < x.size()-1 )
+                std::cout << ";" << std::endl ;
+        }
+        std::cout << "];" ;
+        std::cout << std::endl ;
+    }
 } ParticleMap ;
 
 class DisparitySLAM : public ParticleSLAM{
@@ -336,7 +384,7 @@ public:
     DisparitySLAM(CameraState initial, unsigned int n) : ParticleSLAM(n), maps(n), states(n,initial) {}
 
     DisparitySLAM copy_particles(vector<int> indices){
-        DisparitySLAM new_particles(states[0],0) ;
+        DisparitySLAM new_particles(states[0],indices.size()) ;
         new_particles.maps.clear();
         new_particles.weights.clear();
         new_particles.states.clear();
