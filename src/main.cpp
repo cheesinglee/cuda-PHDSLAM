@@ -57,15 +57,18 @@ size_t deviceMemLimit ;
 // configuration file
 std::string config_filename ;
 
-// measurement datafile
-std::string measurementsFilename ;
+// data directory
+std::string data_dir ;
 
-// control input datafile
-std::string controls_filename ;
+//// measurement datafile
+//std::string measurementsFilename ;
 
-// measurement and control timestamp datafiles
-std::string measurements_time_filename ;
-std::string controls_time_filename ;
+//// control input datafile
+//std::string controls_filename ;
+
+//// measurement and control timestamp datafiles
+//std::string measurements_time_filename ;
+//std::string controls_time_filename ;
 
 // time variables
 time_t rawtime ;
@@ -218,6 +221,7 @@ template <typename T>
 void loadMeasurements( std::string filename, vector<T>& allMeasurements )
 {
     string line ;
+    cout << "Opening measurements file: " << filename << endl ;
     fstream measFile(filename.c_str()) ;
     if (measFile.is_open())
     {
@@ -234,7 +238,47 @@ void loadMeasurements( std::string filename, vector<T>& allMeasurements )
         cout << "Loaded " << allMeasurements.size() << " measurements" << endl ;
     }
     else
+    {
         cout << "could not open measurements file!" << endl ;
+    }
+}
+
+void loadTrajectory( std::string filename, vector<ConstantVelocityState>& trajVector ){
+    cout << "Opening trajectory file: " << filename << endl ;
+    fstream trajFile(filename.c_str()) ;
+    if (trajFile.is_open()){
+        string line ;
+        while (trajFile.good()){
+            getline(trajFile,line) ;
+            // skip header line, if any
+            if (line[0] == '%')
+                continue ;
+            ConstantVelocityState s ;
+            stringstream ss(line,ios_base::in) ;
+            ss >> s.px >> s.py >> s.ptheta >>
+                  s.vx >> s.vy >> s.vtheta ;
+            trajVector.push_back(s);
+        }
+    }
+}
+
+void loadTrajectory( std::string filename, vector<ConstantVelocityState3D>& trajVector ){
+    cout << "Opening trajectory file: " << filename << endl ;
+    fstream trajFile(filename.c_str()) ;
+    if (trajFile.is_open()){
+        string line ;
+        while (trajFile.good()){
+            getline(trajFile,line) ;
+            // skip header line, if any
+            if (line[0] == '%')
+                continue ;
+            ConstantVelocityState3D s ;
+            stringstream ss(line,ios_base::in) ;
+            ss >> s.px >> s.py >> s.pz >> s.proll >> s.ppitch >> s.pyaw >>
+                  s.vx >> s.vy >> s.vz >> s.vroll >> s.vpitch >> s.vyaw ;
+            trajVector.push_back(s);
+        }
+    }
 }
 
 void printMeasurement(RangeBearingMeasurement z)
@@ -691,12 +735,19 @@ void loadConfig(const char* filename)
     options_description desc("SLAM filter config") ;
     desc.add_options()
             ("debug", value<bool>(&config.debug)->default_value(false),"extra debug output")
-            ("initial_x", value<REAL>(&config.x0)->default_value(30), "Initial x position")
-            ("initial_y", value<REAL>(&config.y0)->default_value(5), "Initial y position")
-            ("initial_theta", value<REAL>(&config.theta0)->default_value(0), "Initial heading")
-            ("initial_vx", value<REAL>(&config.vx0)->default_value(7), "Initial x velocity")
+            ("initial_x", value<REAL>(&config.x0)->default_value(0), "Initial x position")
+            ("initial_y", value<REAL>(&config.y0)->default_value(0), "Initial y position")
+            ("initial_z", value<REAL>(&config.z0)->default_value(0), "Initial z position")
+            ("initial_roll", value<REAL>(&config.roll0)->default_value(0), "Initial roll")
+            ("initial_pitch", value<REAL>(&config.pitch0)->default_value(0), "Initial pitch")
+            ("initial_yaw", value<REAL>(&config.yaw0)->default_value(0), "Initial yaw")
+            ("initial_vx", value<REAL>(&config.vx0)->default_value(0), "Initial x velocity")
             ("initial_vy", value<REAL>(&config.vy0)->default_value(0), "Initial y velocity")
-            ("initial_vtheta", value<REAL>(&config.vtheta0)->default_value(0.3142), "Initial heading velocity")
+            ("initial_vz", value<REAL>(&config.vy0)->default_value(0), "Initial z velocity")
+            ("initial_vroll", value<REAL>(&config.vyaw0)->default_value(0), "Initial roll velocity")
+            ("initial_vpitch", value<REAL>(&config.vyaw0)->default_value(0), "Initial pitch velocity")
+            ("initial_vyaw", value<REAL>(&config.vyaw0)->default_value(0), "Initial yaw velocity")
+            ("follow_trajectory", value<bool>(&config.followTrajectory)->default_value(false), "Follow a set trajectory")
             ("motion_type", value<int>(&config.motionType)->default_value(1), "0 = Constant Velocity, 1 = Ackerman steering")
             ("acc_x", value<REAL>(&config.ax)->default_value(0.5), "Standard deviation of x acceleration")
             ("acc_y", value<REAL>(&config.ay)->default_value(0), "Standard deviation of y acceleration")
@@ -762,10 +813,11 @@ void loadConfig(const char* filename)
             ("tau", value<REAL>(&config.tau)->default_value(0), "Velocity threshold for jump markov transition probability")
             ("beta", value<REAL>(&config.beta)->default_value(1), "Steepness of sigmoid function for computing JMM transition probability")
             ("labeled_measurements", value<bool>(&config.labeledMeasurements)->default_value(false), "Use static/dynamic measurement labels for computing likelihood")
-            ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
-            ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
-            ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
-            ("controls_time_filename", value<std::string>(&controls_time_filename)->default_value(""), "Path to control timestamps datafile")
+            ("data_directory", value<std::string>(&data_dir)->default_value("data/"), "Path to simulation inputs")
+//            ("measurements_filename", value<std::string>(&measurementsFilename)->default_value("measurements.txt"), "Path to measurements datafile")
+//            ("controls_filename", value<std::string>(&controls_filename)->default_value("controls.txt"), "Path to controls datafile")
+//            ("measurements_time_filename", value<std::string>(&measurements_time_filename)->default_value(""), "Path to measurement timestamps datafile")
+//            ("controls_time_filename", value<std::string>(&controls_time_filename)->default_value(""), "Path to control timestamps datafile")
             ("max_time_steps", value<int>(&config.maxSteps)->default_value(10000), "Limit the number of time steps to execute")
             ("save_all_maps", value<bool>(&config.saveAllMaps)->default_value(false), "Save all particle maps")
             ("save_prediction", value<bool>(&config.savePrediction)->default_value(false), "Save the predicted state to the log files")
@@ -800,17 +852,21 @@ void run_synth(bool profile_run){
     cout << "running on synthetic data" << endl ;
     // load measurement data
     std::vector<measurementSet> allMeasurements ;
-    loadMeasurements(measurementsFilename,allMeasurements) ;
+    std::string measurements_filename = data_dir + "measurements.txt" ;
+    loadMeasurements(measurements_filename,allMeasurements) ;
     std::vector<measurementSet>::iterator i( allMeasurements.begin() ) ;
     std::vector<RangeBearingMeasurement>::iterator ii ;
 
     // load control inputs
+    std::string controls_filename = data_dir + "controls.txt" ;
     vector<AckermanControl> all_controls ;
     all_controls = loadControls( controls_filename ) ;
 
     // load timestamps
-    vector<REAL> measurement_times = loadTimestamps( measurements_time_filename ) ;
-    vector<REAL> control_times = loadTimestamps( controls_time_filename ) ;
+    std::string measurement_times_filename = data_dir + "measurement_times.txt" ;
+    vector<REAL> measurement_times = loadTimestamps( measurement_times_filename ) ;
+    std::string control_times_filename = data_dir + "control_times.txt" ;
+    vector<REAL> control_times = loadTimestamps( control_times_filename ) ;
     bool has_timestamps = (measurement_times.size() > 0) ;
 
     int nSteps = 0 ;
@@ -837,16 +893,24 @@ void run_synth(bool profile_run){
     if (nSteps > config.maxSteps && config.maxSteps > 0)
         nSteps = config.maxSteps ;
 
+    // load trajectory, if required
+    vector<ConstantVelocityState3D> trajVector ;
+    if (config.followTrajectory){
+        loadTrajectory(data_dir+"traj.txt",trajVector) ;
+        // only need 1 particle
+        config.n_particles = 1 ;
+    }
+
     // initialize particles
     SynthSLAM particles(config.n_particles) ;
     for (int n = 0 ; n < config.n_particles ; n++ )
     {
         particles.states[n].px = config.x0 ;
         particles.states[n].py = config.y0 ;
-        particles.states[n].ptheta = config.theta0 ;
+        particles.states[n].ptheta = config.yaw0 ;
         particles.states[n].vx = config.vx0 ;
         particles.states[n].vy = config.vy0 ;
-        particles.states[n].vtheta = config.vtheta0 ;
+        particles.states[n].vtheta = config.vyaw0 ;
         particles.weights[n] = -log(config.n_particles) ;
         if ( config.filterType == CPHD_TYPE )
         {
@@ -937,9 +1001,14 @@ void run_synth(bool profile_run){
             do_predict = true ;
         }
 
-        // no motion for time step 1
-        if ( n > 0 && do_predict )
+        if (config.followTrajectory){
+            // load the next point in the trajectory
+            for ( int n = 0 ; n < slam.n_particles ; n++ )
+                slam.states[n].pose = trajVector[k] ;
+        }
+        else if ( n > 0 && do_predict )
         {
+            // no motion for time step 1
             cout << "Performing vehicle prediction" << endl ;
             for ( int i = 0 ; i < config.subdividePredict ; i++ )
             {
@@ -1021,28 +1090,39 @@ void run_disparity(){
     cout << "running with image data and disparity measurement model" << endl ;
     // load measurements
     vector<imageMeasurementSet> all_measurements ;
-    loadMeasurements(string("data/flea/measurements.txt"),all_measurements) ;
+    string measurements_filename = data_dir + "measurements.txt" ;
+    loadMeasurements(measurements_filename,all_measurements) ;
     if(n_steps < 0 )
         n_steps = all_measurements.size() ;
+
+    // load trajectory, if required
+    vector<ConstantVelocityState3D> trajVector ;
+    if (config.followTrajectory){
+        loadTrajectory(data_dir+"traj.txt",trajVector) ;
+        // only need 1 particle
+        config.n_particles = 1 ;
+    }
 
     // recompute clutter density
     config.clutterDensity = config.clutterRate/
             (config.imageHeight*config.imageWidth) ;
     setDeviceConfig( config ) ;
 
+
     CameraState initial_state ;
     ConstantVelocityState3D expected_pose ;
-    initial_state.pose.px = 0 ;
-    initial_state.pose.py = 0 ;
-    initial_state.pose.pz = 0 ;
-    initial_state.pose.proll = 0;
-    initial_state.pose.ppitch = 0 ;
-    initial_state.pose.pyaw  = 0 ;
-    initial_state.pose.vx =  0 ;
-    initial_state.pose.vy = 0 ;
-    initial_state.pose.vroll = 0 ;
-    initial_state.pose.vpitch = 0;
-    initial_state.pose.vyaw = 0 ;
+    initial_state.pose.px = config.x0 ;
+    initial_state.pose.py = config.y0 ;
+    initial_state.pose.pz = config.z0 ;
+    initial_state.pose.proll = config.roll0;
+    initial_state.pose.ppitch = config.pitch0 ;
+    initial_state.pose.pyaw  = config.yaw0 ;
+    initial_state.pose.vx =  config.vx0 ;
+    initial_state.pose.vy = config.vy0 ;
+    initial_state.pose.vz = config.vz0 ;
+    initial_state.pose.vroll = config.vroll0 ;
+    initial_state.pose.vpitch = config.vpitch0;
+    initial_state.pose.vyaw = config.vyaw0 ;
     initial_state.fx = config.fx ;
     initial_state.fy = config.fy ;
     initial_state.u0 = config.u0 ;
@@ -1064,9 +1144,16 @@ void run_disparity(){
         strftime(timestamp, 80, "%Y%m%d-%H%M%S", timeinfo ) ;
         cout << timestamp << endl ;
 
-        // no motion from on first measurement
-        if ( k > 0)
+       // prediction
+        if ( config.followTrajectory ){
+            // load the next point in the trajectory
+            for ( int n = 0 ; n < slam.n_particles ; n++ )
+                slam.states[n].pose = trajVector[k] ;
+        }
+        else if ( k > 0 ){
+            // no motion on first time step
             disparityPredict(slam) ;
+        }
 
         // do measurement update
         disparityUpdate(slam,all_measurements[k]);
