@@ -5,18 +5,18 @@
 #include <float.h>
 
 /// evaluate generalized logistic function
-__device__ __host__ REAL
-logistic_function(REAL x, REAL lower, REAL upper, REAL beta, REAL tau)
+__device__ __host__ float
+logistic_function(float x, float lower, float upper, float beta, float tau)
 {
-    REAL y = (upper-lower)/(1+exp(-beta*(x-tau) ) ) ;
+    float y = (upper-lower)/(1+exp(-beta*(x-tau) ) ) ;
     return y ;
 }
 
 /// invert a 2x2 matrix
 __device__ void
-invert_matrix2(REAL *A, REAL *A_inv)
+invert_matrix2(float *A, float *A_inv)
 {
-    REAL det = A[0]*A[3] - A[1]*A[2] ;
+    float det = A[0]*A[3] - A[1]*A[2] ;
     A_inv[0] = A[3]/det ;
     A_inv[1] = -A[1]/det ;
     A_inv[2] = -A[2]/det ;
@@ -25,8 +25,8 @@ invert_matrix2(REAL *A, REAL *A_inv)
 
 /// invert a 3x3 matrix
 __device__ void
-invert_matrix3(REAL *A, REAL* A_inv){
-    REAL det = A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5] -
+invert_matrix3(float *A, float* A_inv){
+    float det = A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5] -
             A[0]*A[7]*A[5] - A[3]*A[1]*A[8] - A[6]*A[4]*A[2] ;
     A_inv[0] = (A[4]*A[8] - A[7]*A[5])/det ;
     A_inv[1] = (A[7]*A[2] - A[1]*A[8])/det ;
@@ -40,10 +40,10 @@ invert_matrix3(REAL *A, REAL* A_inv){
 }
 
 /// determinant of a 4x4 matrix
-__device__ REAL
-det4(REAL *A)
+__device__ float
+det4(float *A)
 {
-    REAL det=0;
+    float det=0;
     det+=A[0]*((A[5]*A[10]*A[15]+A[9]*A[14]*A[7]+A[13]*A[6]*A[11])-(A[5]*A[14]*A[11]-A[9]*A[6]*A[15]-A[13]*A[10]*A[7]));
     det+=A[4]*((A[1]*A[14]*A[11]+A[9]*A[2]*A[15]+A[13]*A[10]*A[3])-(A[1]*A[10]*A[15]-A[9]*A[14]*A[3]-A[13]*A[2]*A[11]));
     det+=A[8]*((A[1]*A[6]*A[15]+A[5]*A[14]*A[3]+A[13]*A[2]*A[7])-(A[1]*A[14]*A[7]-A[5]*A[2]*A[15]-A[13]*A[6]*A[3]));
@@ -53,7 +53,7 @@ det4(REAL *A)
 
 /// invert a 4x4 matrix
 __device__ void
-invert_matrix4( REAL *A, REAL *Ainv)
+invert_matrix4( float *A, float *Ainv)
 {
     Ainv[0] = (A[5] * A[15] * A[10] - A[5] * A[11] * A[14] - A[7] * A[13] * A[10] + A[11] * A[6] * A[13] - A[15] * A[6] * A[9] + A[7] * A[9] * A[14]) / (A[0] * A[5] * A[15] * A[10] - A[0] * A[5] * A[11] * A[14] - A[0] * A[7] * A[13] * A[10] + A[0] * A[11] * A[6] * A[13] - A[0] * A[15] * A[6] * A[9] + A[0] * A[7] * A[9] * A[14] + A[5] * A[3] * A[8] * A[14] - A[5] * A[15] * A[2] * A[8] + A[5] * A[11] * A[2] * A[12] - A[5] * A[3] * A[12] * A[10] - A[15] * A[10] * A[1] * A[4] + A[15] * A[6] * A[1] * A[8] + A[15] * A[2] * A[4] * A[9] + A[3] * A[12] * A[6] * A[9] + A[7] * A[13] * A[2] * A[8] + A[7] * A[1] * A[12] * A[10] + A[3] * A[4] * A[13] * A[10] + A[11] * A[14] * A[1] * A[4] - A[11] * A[6] * A[1] * A[12] - A[11] * A[2] * A[4] * A[13] - A[3] * A[8] * A[6] * A[13] - A[7] * A[9] * A[2] * A[12] - A[7] * A[1] * A[8] * A[14] - A[3] * A[4] * A[9] * A[14]);
     Ainv[1] = -(A[15] * A[10] * A[1] - A[11] * A[14] * A[1] + A[3] * A[9] * A[14] - A[15] * A[2] * A[9] - A[3] * A[13] * A[10] + A[11] * A[2] * A[13]) / (A[0] * A[5] * A[15] * A[10] - A[0] * A[5] * A[11] * A[14] - A[0] * A[7] * A[13] * A[10] + A[0] * A[11] * A[6] * A[13] - A[0] * A[15] * A[6] * A[9] + A[0] * A[7] * A[9] * A[14] + A[5] * A[3] * A[8] * A[14] - A[5] * A[15] * A[2] * A[8] + A[5] * A[11] * A[2] * A[12] - A[5] * A[3] * A[12] * A[10] - A[15] * A[10] * A[1] * A[4] + A[15] * A[6] * A[1] * A[8] + A[15] * A[2] * A[4] * A[9] + A[3] * A[12] * A[6] * A[9] + A[7] * A[13] * A[2] * A[8] + A[7] * A[1] * A[12] * A[10] + A[3] * A[4] * A[13] * A[10] + A[11] * A[14] * A[1] * A[4] - A[11] * A[6] * A[1] * A[12] - A[11] * A[2] * A[4] * A[13] - A[3] * A[8] * A[6] * A[13] - A[7] * A[9] * A[2] * A[12] - A[7] * A[1] * A[8] * A[14] - A[3] * A[4] * A[9] * A[14]);
@@ -77,7 +77,7 @@ template<class GaussianType>
 __device__ __host__ int
 getGaussianDim(GaussianType g)
 {
-    int dims = sizeof(g.mean)/sizeof(REAL) ;
+    int dims = sizeof(g.mean)/sizeof(float) ;
     return dims ;
 }
 
@@ -112,13 +112,13 @@ clearGaussian(GaussianType &a)
 }
 
 /// convolution of two 1D vectors
-__host__ std::vector<REAL>
-conv(std::vector<REAL> a, std::vector<REAL> b)
+__host__ std::vector<float>
+conv(std::vector<float> a, std::vector<float> b)
 {
     int m = a.size() ;
     int n = b.size() ;
     int len = m + n - 1 ;
-    std::vector<REAL> c(len) ;
+    std::vector<float> c(len) ;
     std::fill( c.begin(),c.end(),0) ;
     for ( int k = 0 ; k < len ; k++ )
     {
@@ -134,10 +134,10 @@ conv(std::vector<REAL> a, std::vector<REAL> b)
 
 
 /// wrap an angular value to the range [-pi,pi]
-__host__ __device__ REAL
-wrapAngle(REAL a)
+__host__ __device__ float
+wrapAngle(float a)
 {
-    REAL remainder = fmod(a, REAL(2*M_PI)) ;
+    float remainder = fmod(a, float(2*M_PI)) ;
     if ( remainder > M_PI )
         remainder -= 2*M_PI ;
     else if ( remainder < -M_PI )
@@ -147,10 +147,10 @@ wrapAngle(REAL a)
 
 /// return the closest symmetric positve definite matrix for 2x2 input
 __device__ void
-makePositiveDefinite( REAL A[4] )
+makePositiveDefinite( float A[4] )
 {
     // eigenvalues:
-    REAL detA = A[0]*A[3] + A[1]*A[2] ;
+    float detA = A[0]*A[3] + A[1]*A[2] ;
     // check if already positive definite
     if ( detA > 0 && A[0] > 0 )
     {
@@ -158,13 +158,13 @@ makePositiveDefinite( REAL A[4] )
         A[2] = A[1] ;
         return ;
     }
-    REAL trA = A[0] + A[3] ;
-    REAL trA2 = trA*trA ;
-    REAL eval1 = 0.5*trA + 0.5*sqrt( trA2 - 4*detA ) ;
-    REAL eval2 = 0.5*trA - 0.5*sqrt( trA2 - 4*detA ) ;
+    float trA = A[0] + A[3] ;
+    float trA2 = trA*trA ;
+    float eval1 = 0.5*trA + 0.5*sqrt( trA2 - 4*detA ) ;
+    float eval2 = 0.5*trA - 0.5*sqrt( trA2 - 4*detA ) ;
 
     // eigenvectors:
-    REAL Q[4] ;
+    float Q[4] ;
     if ( fabs(A[1]) > 0 )
     {
         Q[0] = eval1 - A[3] ;
@@ -201,16 +201,16 @@ makePositiveDefinite( REAL A[4] )
 }
 
 /// compute the Mahalanobis distance between two Gaussians
-__device__ REAL
+__device__ float
 computeMahalDist(Gaussian2D a, Gaussian2D b)
 {
-    REAL dist = 0 ;
-    REAL sigma_inv[4] ;
-    REAL sigma[4] ;
+    float dist = 0 ;
+    float sigma_inv[4] ;
+    float sigma[4] ;
     for (int i = 0 ; i <4 ; i++)
         sigma[i] = (a.cov[i] + b.cov[i])/2 ;
     invert_matrix2(sigma,sigma_inv);
-    REAL innov[2] ;
+    float innov[2] ;
     innov[0] = a.mean[0] - b.mean[0] ;
     innov[1] = a.mean[1] - b.mean[1] ;
     dist = innov[0]*innov[0]*sigma_inv[0] +
@@ -219,16 +219,16 @@ computeMahalDist(Gaussian2D a, Gaussian2D b)
     return dist ;
 }
 
-__device__ REAL
+__device__ float
 computeMahalDist(Gaussian3D a, Gaussian3D b)
 {
-    REAL dist = 0 ;
-    REAL sigma_inv[9] ;
-    REAL sigma[9] ;
+    float dist = 0 ;
+    float sigma_inv[9] ;
+    float sigma[9] ;
     for (int i = 0 ; i <9 ; i++)
         sigma[i] = (a.cov[i] + b.cov[i])/2 ;
     invert_matrix3(sigma,sigma_inv);
-    REAL innov[3] ;
+    float innov[3] ;
     innov[0] = a.mean[0] - b.mean[0] ;
     innov[1] = a.mean[1] - b.mean[1] ;
     innov[2] = a.mean[1] - b.mean[1] ;
@@ -238,16 +238,16 @@ computeMahalDist(Gaussian3D a, Gaussian3D b)
     return dist ;
 }
 
-__device__ REAL
+__device__ float
 computeMahalDist(Gaussian4D a, Gaussian4D b)
 {
-    REAL dist = 0 ;
-    REAL sigma_inv[16] ;
-    REAL sigma[16] ;
+    float dist = 0 ;
+    float sigma_inv[16] ;
+    float sigma[16] ;
     for (int i = 0 ; i < 16 ; i++)
         sigma[i] = (a.cov[i] + b.cov[i])/2 ;
     invert_matrix4(sigma,sigma_inv) ;
-    REAL innov[4] ;
+    float innov[4] ;
     for ( int i = 0 ; i < 4 ; i++ )
         innov[i] = a.mean[i] - b.mean[i] ;
     dist = innov[0]*(sigma_inv[0]*innov[0] + sigma_inv[4]*innov[1] + sigma_inv[8]*innov[2] + sigma_inv[12]*innov[3])
@@ -259,15 +259,15 @@ computeMahalDist(Gaussian4D a, Gaussian4D b)
 
 /// Compute the Hellinger distance between two Gaussians
 template<class GaussianType>
-__device__ REAL
+__device__ float
 computeHellingerDist( GaussianType a, GaussianType b)
 {
-    REAL dist = 0 ;
-//    REAL innov[2] ;
-//    REAL sigma[4] ;
-//    REAL detSigma ;
-//    REAL sigmaInv[4] = {1,0,0,1} ;
-//    REAL dist ;
+    float dist = 0 ;
+//    float innov[2] ;
+//    float sigma[4] ;
+//    float detSigma ;
+//    float sigmaInv[4] = {1,0,0,1} ;
+//    float dist ;
 //    innov[0] = a.mean[0] - b.mean[0] ;
 //    innov[1] = a.mean[1] - b.mean[1] ;
 //    sigma[0] = a.cov[0] + b.cov[0] ;
@@ -282,7 +282,7 @@ computeHellingerDist( GaussianType a, GaussianType b)
 //        sigmaInv[2] = -sigma[2]/detSigma ;
 //        sigmaInv[3] = sigma[0]/detSigma ;
 //    }
-//    REAL epsilon = -0.25*
+//    float epsilon = -0.25*
 //            (innov[0]*innov[0]*sigmaInv[0] +
 //             innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
 //             innov[1]*innov[1]*sigmaInv[3]) ;
@@ -304,7 +304,7 @@ computeHellingerDist( GaussianType a, GaussianType b)
 
 /// a nan-safe logarithm
 __device__ __host__
-REAL safeLog( REAL x )
+float safeLog( float x )
 {
     if ( x <= 0 )
         return LOG0 ;
@@ -313,7 +313,7 @@ REAL safeLog( REAL x )
 }
 
 //__device__ void
-//cholesky( REAL*A, REAL* L, int size)
+//cholesky( float*A, float* L, int size)
 //{
 //    int i = size ;
 //    int n_elements = 0 ;
@@ -349,7 +349,7 @@ REAL safeLog( REAL x )
   \param tid thread index
   */
 __device__ void
-sumByReduction( volatile REAL* sdata, REAL mySum, const unsigned int tid )
+sumByReduction( volatile float* sdata, float mySum, const unsigned int tid )
 {
     sdata[tid] = mySum;
     __syncthreads();
@@ -381,7 +381,7 @@ sumByReduction( volatile REAL* sdata, REAL mySum, const unsigned int tid )
   \param tid thread index
   */
 __device__ void
-productByReduction( volatile REAL* sdata, REAL my_factor, const unsigned int tid )
+productByReduction( volatile float* sdata, float my_factor, const unsigned int tid )
 {
     sdata[tid] = my_factor;
     __syncthreads();
@@ -413,7 +413,7 @@ productByReduction( volatile REAL* sdata, REAL my_factor, const unsigned int tid
   \param tid thread index
   */
 __device__ void
-maxByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
+maxByReduction( volatile float* sdata, float val, const unsigned int tid )
 {
     sdata[tid] = val ;
     __syncthreads();
@@ -434,24 +434,35 @@ maxByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
     __syncthreads() ;
 }
 
-__device__ REAL
-logsumexpByReduction( volatile REAL* sdata, REAL val, const unsigned int tid )
+__device__ float
+logsumexpByReduction( volatile float* sdata, float val, const unsigned int tid )
 {
     maxByReduction( sdata, val, tid ) ;
-    REAL maxval = sdata[0] ;
+    float maxval = sdata[0] ;
     __syncthreads() ;
 
     sumByReduction( sdata, exp(val-maxval), tid) ;
     return safeLog(sdata[0]) + maxval ;
 }
 
+template <typename T>
+__host__ T
+logSumExp( std::vector<T> vals ){
+    T maxval = *max_element(vals.begin(),vals.end()) ;
+    T sum = 0 ;
+    for (int i = 0 ; i < vals.size() ; i++ ){
+        sum += exp(vals[i]-maxval) ;
+    }
+    return safeLog(sum) + maxval ;
+}
+
 
 typedef struct
 {
-    REAL std_accx ;
-    REAL std_accy ;
-    __device__ __host__ Gaussian4D
-    compute_prediction(Gaussian4D state_prior, REAL dt, REAL scale_x, REAL scale_y)
+    float std_accx ;
+    float std_accy ;
+    __device__ Gaussian4D
+    compute_prediction(Gaussian4D state_prior, float dt, float scale_x, float scale_y)
     {
         Gaussian4D state_predict ;
         // predicted weight
@@ -464,33 +475,33 @@ typedef struct
         state_predict.mean[3] = state_prior.mean[3] ;
 
         // predicted covariance
-        REAL var_x = pow(std_accx,2)*scale_x ;
-        REAL var_y = pow(std_accy,2)*scale_y ;
+        float var_x = pow(std_accx,2)*scale_x ;
+        float var_y = pow(std_accy,2)*scale_y ;
 
         state_predict.cov[0] = state_prior.cov[0] + state_prior.cov[8] * dt
                 + dt * (state_prior.cov[2] + state_prior.cov[10] * dt)
-                + pow(dt, 0.4e1) * var_x / 0.4e1;
+                + powf(dt, 0.4e1) * var_x / 0.4e1;
         state_predict.cov[1] = state_prior.cov[1] + state_prior.cov[9] * dt
                 + dt * (state_prior.cov[3] + state_prior.cov[11] * dt);
         state_predict.cov[2] = state_prior.cov[2] + state_prior.cov[10] * dt
-                + pow(dt, 0.3e1) * var_x / 0.2e1;
+                + powf(dt, 0.3e1) * var_x / 0.2e1;
         state_predict.cov[3] = state_prior.cov[3] + state_prior.cov[11] * dt;
         state_predict.cov[4] = state_prior.cov[4] + state_prior.cov[12] * dt
                 + dt * (state_prior.cov[6] + state_prior.cov[14] * dt);
         state_predict.cov[5] = state_prior.cov[5] + state_prior.cov[13] * dt
                 + dt * (state_prior.cov[7] + state_prior.cov[15] * dt)
-                + pow(dt, 0.4e1) * var_y / 0.4e1;
+                + powf(dt, 0.4e1) * var_y / 0.4e1;
         state_predict.cov[6] = state_prior.cov[6] + state_prior.cov[14] * dt;
         state_predict.cov[7] = state_prior.cov[7] + state_prior.cov[15] * dt
-                + pow(dt, 0.3e1) * var_y / 0.2e1;
+                + powf(dt, 0.3e1) * var_y / 0.2e1;
         state_predict.cov[8] = state_prior.cov[8] + state_prior.cov[10] * dt
-                + pow(dt, 0.3e1) * var_x / 0.2e1;
+                + powf(dt, 0.3e1) * var_x / 0.2e1;
         state_predict.cov[9] = state_prior.cov[9] + state_prior.cov[11] * dt;
         state_predict.cov[10] = state_prior.cov[10] + var_x * dt * dt;
         state_predict.cov[11] = state_prior.cov[11];
         state_predict.cov[12] = state_prior.cov[12] + state_prior.cov[14] * dt;
         state_predict.cov[13] = state_prior.cov[13] + state_prior.cov[15] * dt
-                + pow(dt, 0.3e1) * var_y / 0.2e1;
+                + powf(dt, 0.3e1) * var_y / 0.2e1;
         state_predict.cov[14] = state_prior.cov[14];
         state_predict.cov[15] = state_prior.cov[15] + var_y * dt * dt;
 
@@ -500,10 +511,10 @@ typedef struct
 
 typedef struct
 {
-    REAL std_vx ;
-    REAL std_vy ;
-    __device__ __host__ Gaussian2D
-    compute_prediction(Gaussian2D state_prior, REAL dt)
+    float std_vx ;
+    float std_vy ;
+    __device__ Gaussian2D
+    compute_prediction(Gaussian2D state_prior, float dt)
     {
         Gaussian2D state_predict ;
         // predicted weight
@@ -563,6 +574,49 @@ void force_symmetric_covariance(GaussianType &g)
             g.cov[idx_upper] = g.cov[idx_lower] ;
         }
     }
+}
+
+// Hybrid Random Number Generator from GPU Gems 3
+
+typedef struct{
+    unsigned z1 ;
+    unsigned z2 ;
+    unsigned z3 ;
+    unsigned z4 ;
+} RngState ;
+
+__device__
+unsigned TausStep(unsigned &z, int S1, int S2, int S3, unsigned M)
+{
+  unsigned b=(((z << S1) ^ z) >> S2);
+  return z = (((z & M) << S3) ^ b);
+}
+
+__device__
+unsigned LCGStep(unsigned &z, unsigned A, unsigned C)
+{
+  return z=(A*z+C);
+}
+
+__device__ float
+HybridTaus(RngState& state)
+{
+  // Combined period is lcm(p1,p2,p3,p4)~ 2^121
+   return 2.3283064365387e-10 * (              // Periods
+    TausStep(state.z1, 13, 19, 12, 4294967294UL) ^  // p1=2^31-1
+    TausStep(state.z2, 2, 25, 4, 4294967288UL) ^    // p2=2^30-1
+    TausStep(state.z3, 3, 11, 17, 4294967280UL) ^   // p3=2^28-1
+    LCGStep(state.z4, 1664525, 1013904223UL)        // p4=2^32
+   );
+}
+
+/// return a normally distributed random number with the box-muller transform
+__device__ float2
+randn(RngState& state){
+    float u0=HybridTaus(state), u1=HybridTaus(state);
+    float r=sqrt(-2*safeLog(u0));
+    float theta=2*M_PI*u1;
+    return make_float2(r*sin(theta),r*cos(theta));
 }
 
 #endif // DEVICE_MATH_H
