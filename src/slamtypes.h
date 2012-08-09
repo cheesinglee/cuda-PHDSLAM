@@ -9,14 +9,15 @@
 #define SLAMTYPES_H_
 
 #include <vector>
-#include <map>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <algorithm>
 #include <stdlib.h>
 #include <float.h>
 //#include <eigen3/Eigen/Eigen>
 
-#define REAL double
+#define REAL float
 #define PHD_TYPE 0
 #define CPHD_TYPE 1
 #define CV_MOTION 0
@@ -143,10 +144,19 @@ typedef struct{
     // initial state
     REAL x0 ;
     REAL y0 ;
-    REAL theta0 ;
+    REAL z0 ;
+    REAL roll0 ;
+    REAL pitch0 ;
+    REAL yaw0 ;
     REAL vx0 ;
     REAL vy0 ;
-    REAL vtheta0 ;
+    REAL vz0 ;
+    REAL vroll0 ;
+    REAL vpitch0 ;
+    REAL vyaw0 ;
+
+    // follow a set trajectory?
+    bool followTrajectory ;
 
     // constant velocity process noise
     REAL ax ;
@@ -264,7 +274,7 @@ typedef vector<ImageMeasurement> imageMeasurementSet ;
 class ParticleSLAM{
 public:
     int n_particles ;
-    vector<double> weights ;
+    vector<REAL> weights ;
     vector<ConstantVelocityState> states ;
     vector<int> resample_idx ;
 

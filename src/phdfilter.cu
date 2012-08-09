@@ -161,42 +161,6 @@ vector<GaussianType> combineFeatures(vector<vector <GaussianType> > maps, ...)
     return concat ;
 }
 
-/// host-side log-sum-exponent for STL vector of doubles
-double logSumExp( vector<double>log_terms )
-{
-    double val = log_terms[0] ;
-    double sum = 0 ;
-    for ( int i = 0 ; i < log_terms.size() ; i++ )
-    {
-        if ( log_terms[i] > val )
-            val = log_terms[i] ;
-    }
-    for ( int i = 0 ; i < log_terms.size() ; i++ )
-    {
-        sum += exp(log_terms[i]-val) ;
-    }
-    sum = safeLog(sum) + val ;
-    return sum ;
-}
-
-/// host-side log-sum-exponent for STL vector of floats
-double logSumExp( vector<float>log_terms )
-{
-    double val = log_terms[0] ;
-    double sum = 0 ;
-    for ( int i = 0 ; i < log_terms.size() ; i++ )
-    {
-        if ( log_terms[i] > val )
-            val = log_terms[i] ;
-    }
-    for ( int i = 0 ; i < log_terms.size() ; i++ )
-    {
-        sum += exp(log_terms[i]-val) ;
-    }
-    sum = safeLog(sum) + val ;
-    return sum ;
-}
-
 /// return the next highest power of two
 int nextPowerOfTwo(int a)
 {
@@ -1192,7 +1156,7 @@ phdPredict(SynthSLAM& particles, ... )
     {
         vector<vector<Gaussian2D> > maps_predict_static ;
         vector<vector<Gaussian4D> > maps_predict_dynamic ;
-        vector<double> weights_predict ;
+        vector<REAL> weights_predict ;
         vector< vector <REAL> > cardinalities_predict ;
         maps_predict_static.clear();
         maps_predict_static.reserve(nPredict);
@@ -3713,7 +3677,7 @@ recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
         expectedPose.vtheta = 0 ;
         for ( int i = 0 ; i < particles.n_particles ; i++ )
         {
-            double exp_weight = exp(particles.weights[i]) ;
+            REAL exp_weight = exp(particles.weights[i]) ;
             expectedPose.px += exp_weight*particles.states[i].px ;
             expectedPose.py += exp_weight*particles.states[i].py ;
             expectedPose.ptheta += exp_weight*particles.states[i].ptheta ;
@@ -3729,7 +3693,7 @@ recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
 //		*expectedMap = tmpMap ;
 
         // Maximum a priori estimate
-        double max_weight = -FLT_MAX ;
+        REAL max_weight = -FLT_MAX ;
         int max_idx = -1 ;
         for ( int i = 0 ; i < particles.n_particles ; i++ )
         {
@@ -3788,7 +3752,7 @@ recoverSlamState(DisparitySLAM& particles, ConstantVelocityState3D& expectedPose
         expectedPose.vyaw = 0 ;
         for ( int i = 0 ; i < particles.n_particles ; i++ )
         {
-            double exp_weight = exp(particles.weights[i]) ;
+            REAL exp_weight = exp(particles.weights[i]) ;
             expectedPose.px += exp_weight*particles.states[i].pose.px ;
             expectedPose.py += exp_weight*particles.states[i].pose.py ;
             expectedPose.pz += exp_weight*particles.states[i].pose.pz ;
@@ -3804,7 +3768,7 @@ recoverSlamState(DisparitySLAM& particles, ConstantVelocityState3D& expectedPose
         }
 
         // Maximum a priori estimate
-        double max_weight = -FLT_MAX ;
+        REAL max_weight = -FLT_MAX ;
         int max_idx = -1 ;
         for ( int i = 0 ; i < particles.n_particles ; i++ )
         {
@@ -4035,6 +3999,14 @@ struct divide_by : public thrust::unary_function<T,T>
     operator()(T x){return x/N ;}
 };
 
+/// unary operator which returns the weight of a gaussian object
+template <typename T>
+struct get_weight : public thrust::unary_function<T,REAL>
+{
+    __device__ REAL
+    operator()(T g){ return g.weight; }
+} ;
+
 struct gt0 : public thrust::unary_function<REAL,bool>
 {
     __host__ __device__ bool
@@ -4056,9 +4028,9 @@ struct is_inrange : public thrust::unary_function<Gaussian3D,bool>
         REAL v = g.mean[1] ;
         REAL d = g.mean[2] ;
         bool in_fov = (u > 0) &&
-            (u < dev_config.imageWidth) &&
-            (v > 0) &&
-            (v < dev_config.imageHeight) &&
+            (u <= dev_config.imageWidth) &&
+            (v >= 0) &&
+            (v <= dev_config.imageHeight) &&
             (d >= 0);
         return in_fov ;
     }
@@ -4182,6 +4154,62 @@ fitGaussiansKernel(REAL* uArray, REAL* vArray, REAL* dArray,
 }
 
 __global__ void
+sampleGaussiansKernel(Gaussian3D* gaussians, int n_gaussians,
+                      RngState* seeds,REAL* samples){
+    int tid = blockIdx.x*blockDim.x + threadIdx.x ;
+
+    if (tid < dev_config.particlesPerFeature){
+        // initialize this thread's random number generator
+        RngState random_state = seeds[tid] ;
+
+        float x1,x2,x3,x_extra ;
+        float2 randnorms ;
+        bool odd_iteration = false ;
+
+        int idx_result = tid ;
+        int step = dev_config.particlesPerFeature*n_gaussians ;
+
+        // loop over gaussians
+        for (int n = 0 ; n < n_gaussians ; n++){
+            // cholesky decomposition of covariance matrix
+            REAL L11 = sqrt(gaussians[n].cov[0]) ;
+            REAL L21 = gaussians[n].cov[1]/L11 ;
+            REAL L22 = sqrt(gaussians[n].cov[4]-pow(L21,2)) ;
+            REAL L31 = gaussians[n].cov[2]/L11 ;
+            REAL L32 = (gaussians[n].cov[5]-L31*L21)/L22 ;
+            REAL L33 = sqrt(gaussians[n].cov[8] - pow(L31,2) - pow(L32,2)) ;
+
+            // generate uncorrelated normally distributed random values
+            randnorms = randn(random_state) ;
+            x1 = randnorms.x ;
+            x2 = randnorms.y ;
+
+            // the box-muller transform gives us normal variates two at a time,
+            // but we only need 3, so on even iterations, we call the transform
+            // twice and save the extra value to use in the next iteration.
+            if ( !odd_iteration ){
+                randnorms = randn(random_state) ;
+                x3 = randnorms.x ;
+                x_extra = randnorms.y ;
+                odd_iteration = true ;
+            }
+            else
+            {
+                x3 = x_extra ;
+                odd_iteration = false ;
+            }
+
+            // multiply uncorrelated values by cholesky decomposition and add
+            // mean
+            samples[idx_result] = x1*L11 + gaussians[n].mean[0] ;
+            samples[idx_result+step] = x1*L21 + x2*L22 + gaussians[n].mean[1] ;
+            samples[idx_result+2*step] = x1*L31 + x2*L32 + x3*L33 + gaussians[n].mean[2] ;
+            idx_result += dev_config.particlesPerFeature ;
+        }
+    }
+}
+
+__global__ void
 preUpdateDisparityKernel(Gaussian3D* features_predict,
                          REAL* features_pd,
                          int n_features,
@@ -4212,7 +4240,7 @@ preUpdateDisparityKernel(Gaussian3D* features_predict,
         K[4] = feature.cov[1]*sigma_inv[2] + feature.cov[4]*sigma_inv[3] ;
         K[5] = feature.cov[2]*sigma_inv[2] + feature.cov[5]*sigma_inv[3] ;
 
-        // Maple-generated code
+        // Maple-generated code for P = (IHK)*P*(IHK)' + KRK
         REAL cov_preupdate[9] ;
         cov_preupdate[0] = (1 - K[0]) * (feature.cov[0] * (1 - K[0]) - feature.cov[3] * K[3]) - K[3] * (feature.cov[1] * (1 - K[0]) - feature.cov[4] * K[3]) + varU *  pow( K[0],  2) + varV *  pow( K[3],  2);
         cov_preupdate[1] = -K[1] * (feature.cov[0] * (1 - K[0]) - feature.cov[3] * K[3]) + (1 - K[4]) * (feature.cov[1] * (1 - K[0]) - feature.cov[4] * K[3]) + K[0] * varU * K[1] + K[3] * varV * K[4];
@@ -4223,6 +4251,7 @@ preUpdateDisparityKernel(Gaussian3D* features_predict,
         cov_preupdate[6] = (1 - K[0]) * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) - K[3] * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) + K[0] * varU * K[2] + K[3] * varV * K[5];
         cov_preupdate[7] = -K[1] * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) + (1 - K[4]) * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) + K[1] * varU * K[2] + K[4] * varV * K[5];
         cov_preupdate[8] = -K[2] * (-feature.cov[0] * K[2] - feature.cov[3] * K[5] + feature.cov[6]) - K[5] * (-feature.cov[1] * K[2] - feature.cov[4] * K[5] + feature.cov[7]) - feature.cov[2] * K[2] - feature.cov[5] * K[5] + feature.cov[8] + varU *  pow( K[2],  2) + varV *  pow( K[5],  2);
+        // end maple code
 
         for ( int m = 0 ; m < n_measure ; m++){
             int preupdate_idx = m*n_features + i ;
@@ -4234,7 +4263,7 @@ preUpdateDisparityKernel(Gaussian3D* features_predict,
                     innov[0]*innov[1]*(sigma_inv[1]+sigma_inv[2]) +
                     innov[1]*innov[1]*sigma_inv[3] ;
             REAL log_weight = safeLog(pd) + safeLog(feature.weight)
-                    - 0.5*dist - safeLog(2*M_PI) - safeLog(det_sigma) ;
+                    - 0.5*dist - safeLog(2*M_PI) - 0.5*safeLog(det_sigma) ;
 
             features_preupdate[preupdate_idx].weight = log_weight ;
             features_preupdate[preupdate_idx].mean[0] = feature.mean[0] +
@@ -4682,13 +4711,13 @@ disparityUpdate(DisparitySLAM& slam,
          raw_pointer_cast(&dev_gaussians[0]) ) ;
 //    cudaPrintfDisplay() ;
 
-//    if(config.debug){
-//        DEBUG_MSG("Fitted gaussians:") ;
-//        for ( int n = 0 ; n < n_features_total ; n++ ){
-//            Gaussian3D g = dev_gaussians[n] ;
-//            print_feature(g) ;
-//        }
-//    }
+    if(config.debug){
+        DEBUG_MSG("Fitted gaussians:") ;
+        for ( int n = 0 ; n < n_features_total ; n++ ){
+            Gaussian3D g = dev_gaussians[n] ;
+            print_feature(g) ;
+        }
+    }
 
     // separate in range and out of range gaussians
     DEBUG_MSG("Separating in-range features") ;
@@ -4714,10 +4743,10 @@ disparityUpdate(DisparitySLAM& slam,
 //        }
 //    }
 
-    if (config.debug){
-        DEBUG_MSG("out-of-range particles:") ;
-        particles_out[0].print() ;
-    }
+//    if (config.debug){
+//        DEBUG_MSG("out-of-range particles:") ;
+//        particles_out[0].print() ;
+//    }
 
     // generate the birth terms
     DEBUG_MSG("Generating birth terms from measurements") ;
@@ -4748,7 +4777,7 @@ disparityUpdate(DisparitySLAM& slam,
     }
     DEBUG_MSG("copy births to device") ;
     device_vector<Gaussian3D> dev_gaussians_birth = gaussians_birth ;
-    DEBUG_MSG("copy measurements to device") ;
+
     DEBUG_VAL(n_measurements) ;
     if (config.debug){
         for ( int i = 0 ; i < measurements.size() ; i++){
@@ -4756,6 +4785,7 @@ disparityUpdate(DisparitySLAM& slam,
         }
     }
     device_vector<ImageMeasurement> dev_measurements(n_measurements) ;
+    DEBUG_MSG("copy measurements to device") ;
     dev_measurements = measurements ;
 
     // do the preupdate
@@ -4771,13 +4801,13 @@ disparityUpdate(DisparitySLAM& slam,
             raw_pointer_cast(&dev_measurements[0]),
             n_measurements,
             raw_pointer_cast(&dev_gaussians_preupdate[0]));
-//        if (config.debug){
-//            DEBUG_MSG("pre-update terms:") ;
-//            for(int j = 0 ; j < n_features_in*n_measurements ; j++ ){
-//                Gaussian3D g= dev_gaussians_preupdate[j] ;
-//                print_feature(g) ;
-//            }
-//        }
+        if (config.debug){
+            DEBUG_MSG("pre-update terms:") ;
+            for(int j = 0 ; j < n_features_in*n_measurements ; j++ ){
+                Gaussian3D g= dev_gaussians_preupdate[j] ;
+                print_feature(g) ;
+            }
+        }
     }
 
     // do the sc-phd update
@@ -4827,19 +4857,19 @@ disparityUpdate(DisparitySLAM& slam,
     dev_gaussians_preupdate.resize(0);
     dev_gaussians_preupdate.shrink_to_fit();
 
-//    if(config.debug){
-//        DEBUG_MSG("Updated gaussians and merge flags: ") ;
-//        for (int n = 0 ; n < n_update ; n++){
-//            bool flag = dev_merge_flags[n] ;
-//            cout << flag << " " ;
-//            Gaussian3D g = dev_gaussians_update[n] ;
-//            print_feature(g) ;
-//        }
-//    }
+    if(config.debug){
+        DEBUG_MSG("Updated gaussians and merge flags: ") ;
+        for (int n = 0 ; n < n_update ; n++){
+            bool flag = dev_merge_flags[n] ;
+            cout << flag << " " ;
+            Gaussian3D g = dev_gaussians_update[n] ;
+            print_feature(g) ;
+        }
+    }
 
     // do the GM-merging
     device_vector<int> dev_merged_sizes(slam.n_particles) ;
-    device_vector<Gaussian3D> dev_gaussians_merged(n_update) ;
+    device_vector<Gaussian3D> dev_gaussians_merged_tmp(n_update) ;
 
     // recalculate offsets for updated map size
     for ( int n = 0 ; n < (slam.n_particles+1) ; n++ ){
@@ -4852,69 +4882,153 @@ disparityUpdate(DisparitySLAM& slam,
     DEBUG_MSG("Performing GM reduction") ;
     phdUpdateMergeKernel<<<n_blocks,256>>>
      (raw_pointer_cast(&dev_gaussians_update[0]),
-      raw_pointer_cast(&dev_gaussians_merged[0]),
+      raw_pointer_cast(&dev_gaussians_merged_tmp[0]),
       raw_pointer_cast(&dev_merged_sizes[0]),
       raw_pointer_cast(&dev_merge_flags[0]),
       raw_pointer_cast(&dev_map_offsets[0]),
       slam.n_particles) ;
     CUDA_SAFE_THREAD_SYNC() ;
 
-
-    // copy merged features to host, and sample disparity particles
-    DEBUG_MSG("Sampling disparity space particles") ;
+    // copy out the results of the GM reduction, leaving only valid gaussians
     host_vector<int> merged_sizes = dev_merged_sizes ;
-    host_vector<REAL> u_vector ;
-    host_vector<REAL> v_vector ;
-    host_vector<REAL> d_vector ;
-    host_vector<Gaussian3D> gaussians_merged = dev_gaussians_merged ;
-    camera_idx_vector.clear();
-    for ( int n = 0 ; n < slam.n_particles ; n++ ){
-        int offset = map_offsets_in[n] ;
-        int n_merged = merged_sizes[n] ;
-        if(config.debug)
-            DEBUG_VAL(n_merged) ;
-        host_vector<REAL> weights(0) ;
-        camera_idx_vector.insert(camera_idx_vector.end(),
-                               n_merged*config.particlesPerFeature, n) ;
-        for ( int i = 0 ; i < n_merged ; i++ ){
-            Gaussian3D g = gaussians_merged[offset+i] ;
-//            if(config.debug)
-//                print_feature(g) ;
-            vector<REAL> samples(config.particlesPerFeature*3) ;
-            randmvn3(g.mean,g.cov,config.particlesPerFeature,&samples[0]);
-            REAL* u_ptr = &samples[0] ;
-            REAL* v_ptr = u_ptr+config.particlesPerFeature ;
-            REAL* d_ptr = v_ptr+config.particlesPerFeature ;
-            u_vector.insert(u_vector.end(),
-                            u_ptr, u_ptr+config.particlesPerFeature) ;
-            v_vector.insert(v_vector.end(),
-                            v_ptr, v_ptr+config.particlesPerFeature) ;
-            d_vector.insert(d_vector.end(),
-                            d_ptr, d_ptr+config.particlesPerFeature) ;
-
-            // save the gaussian weight now
-            weights.push_back(g.weight);
-        }
-        slam.maps[n].weights.assign(weights.begin(),weights.end()) ;
+    int n_merged_total = thrust::reduce(merged_sizes.begin(),
+                                        merged_sizes.end()) ;
+    device_vector<Gaussian3D> dev_gaussians_merged(n_merged_total) ;
+    device_vector<Gaussian3D>::iterator it = dev_gaussians_merged.begin() ;
+    for ( int n = 0 ; n < merged_sizes.size() ; n++){
+        it = thrust::copy_n(&dev_gaussians_merged_tmp[map_offsets_in[n]],
+                        merged_sizes[n],
+                        it) ;
     }
 
-//    if(config.debug){
-//        DEBUG_MSG("Verify Gaussian sampling:") ;
-//        print_feature(gaussians_merged[0]) ;
-//        for(int j = 0 ; j < config.particlesPerFeature ; j++){
-//            cout << u_vector[j] << "," << v_vector[j] << "," << d_vector[j] << endl ;
-//        }
+    // get the updated feature weights
+    device_vector<REAL> dev_merged_weights(n_merged_total) ;
+    get_weight<Gaussian3D> op ;
+    thrust::transform(dev_gaussians_merged.begin(),
+                      dev_gaussians_merged.end(),
+                      dev_merged_weights.begin(),
+                      op) ;
+    host_vector<REAL> merged_weights = dev_merged_weights ;
+    if (config.debug)
+    {
+        DEBUG_MSG("merged feature weights: ") ;
+        for( int n = 0 ; n < merged_weights.size() ; n++){
+            cout << merged_weights[n] << endl ;
+        }
+    }
+
+    // initialize seeds for device-side random number generators
+    host_vector<RngState> seeds(config.particlesPerFeature) ;
+    for ( int n = 0 ; n < config.particlesPerFeature ; n++ ){
+        seeds[n].z1 = static_cast<unsigned>(randu01()*127 + 129) ;
+        seeds[n].z2 = static_cast<unsigned>(randu01()*127 + 129) ;
+        seeds[n].z3 = static_cast<unsigned>(randu01()*127 + 129) ;
+        seeds[n].z4 = static_cast<unsigned>(randu01()*256) ;
+    }
+    device_vector<RngState> dev_seeds = seeds ;
+//    DEBUG_MSG("seeds: ") ;
+//    for (int n = 0 ; n < seeds.size() ; n++){
+//        cout << "[" << seeds[n].z1 << "," << seeds[n].z2 << ","
+//             << seeds[n].z3 << "," << seeds[n].z4 << "]" << endl ;
 //    }
 
-    // copy disparity particles to device
-    n_particles_total = u_vector.size() ;
+    // generate samples from merged gaussians
+    DEBUG_MSG("Sampling merged gaussians") ;
+    int n_particles_merged = n_merged_total*config.particlesPerFeature ;
+    device_vector<REAL> dev_samples(3*n_particles_merged) ;
+    n_blocks = ceil(config.particlesPerFeature/256.0) ;
+    DEBUG_VAL(n_blocks) ;
+    sampleGaussiansKernel<<<n_blocks,256>>>(
+                            raw_pointer_cast(&dev_gaussians_merged[0]),
+                            n_merged_total,
+                            raw_pointer_cast(&dev_seeds[0]),
+                            raw_pointer_cast(&dev_samples[0]));
+
+    if(config.debug){
+        DEBUG_MSG("Verify Gaussian sampling:") ;
+        Gaussian3D g = dev_gaussians_merged[0] ;
+        print_feature(g) ;
+        for(int j = 0 ; j < config.particlesPerFeature ; j++){
+            cout << dev_samples[j] << ","
+                 << dev_samples[j+n_particles_merged] << ","
+                 << dev_samples[j+2*n_particles_merged] << endl ;
+        }
+    }
+
+    // split samples into individual components
+    dev_u_vector.resize(n_particles_merged);
+    dev_v_vector.resize(n_particles_merged);
+    dev_d_vector.resize(n_particles_merged);
+    thrust::copy_n(dev_samples.begin(),
+                   n_particles_merged,dev_u_vector.begin()) ;
+    thrust::copy_n(dev_samples.begin()+n_particles_merged,
+                   n_particles_merged,dev_v_vector.begin()) ;
+    thrust::copy_n(dev_samples.begin()+2*n_particles_merged,
+                   n_particles_merged,dev_d_vector.begin()) ;
+
+
+    // prepare the camera index vector for transforming the particles
+    // and save gaussian weights
+    camera_idx_vector.clear();
+    int offset = 0 ;
+    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+        int n_merged = merged_sizes[n] ;
+        camera_idx_vector.insert(camera_idx_vector.end(),
+                                 n_merged*config.particlesPerFeature, n) ;
+        slam.maps[n].weights.assign(&merged_weights[offset],
+                                    &merged_weights[offset+n_merged]);
+        offset += n_merged ;
+    }
     dev_camera_idx_vector = camera_idx_vector ;
-    dev_u_vector = u_vector ;
-    dev_v_vector = v_vector ;
-    dev_d_vector = d_vector ;
-    dev_x_vector.resize(n_particles_total);
-    dev_y_vector.resize(n_particles_total);
-    dev_z_vector.resize(n_particles_total);
+
+
+//    // copy merged features to host, and sample disparity particles
+//    DEBUG_MSG("Sampling disparity space particles") ;
+
+//    host_vector<REAL> u_vector ;
+//    host_vector<REAL> v_vector ;
+//    host_vector<REAL> d_vector ;
+//    host_vector<Gaussian3D> gaussians_merged = dev_gaussians_merged ;
+//    camera_idx_vector.clear();
+//    for ( int n = 0 ; n < slam.n_particles ; n++ ){
+//        int offset = map_offsets_in[n] ;
+//        int n_merged = merged_sizes[n] ;
+//        if(config.debug)
+//            DEBUG_VAL(n_merged) ;
+//        host_vector<REAL> weights(0) ;
+//        camera_idx_vector.insert(camera_idx_vector.end(),
+//                               n_merged*config.particlesPerFeature, n) ;
+//        for ( int i = 0 ; i < n_merged ; i++ ){
+//            Gaussian3D g = gaussians_merged[offset+i] ;
+////            if(config.debug)
+////                print_feature(g) ;
+//            vector<REAL> samples(config.particlesPerFeature*3) ;
+//            randmvn3(g.mean,g.cov,config.particlesPerFeature,&samples[0]);
+//            REAL* u_ptr = &samples[0] ;
+//            REAL* v_ptr = u_ptr+config.particlesPerFeature ;
+//            REAL* d_ptr = v_ptr+config.particlesPerFeature ;
+//            u_vector.insert(u_vector.end(),
+//                            u_ptr, u_ptr+config.particlesPerFeature) ;
+//            v_vector.insert(v_vector.end(),
+//                            v_ptr, v_ptr+config.particlesPerFeature) ;
+//            d_vector.insert(d_vector.end(),
+//                            d_ptr, d_ptr+config.particlesPerFeature) ;
+
+//            // save the gaussian weight now
+//            weights.push_back(g.weight);
+//        }
+//        slam.maps[n].weights.assign(weights.begin(),weights.end()) ;
+//    }
+
+
+    // copy disparity particles to device
+//    n_particles_total = u_vector.size() ;
+//    dev_u_vector = u_vector ;
+//    dev_v_vector = v_vector ;
+//    dev_d_vector = d_vector ;
+    dev_x_vector.resize(n_particles_merged);
+    dev_y_vector.resize(n_particles_merged);
+    dev_z_vector.resize(n_particles_merged);
 
 
 //    for (int n = 0 ; n < u_vector.size() ; n++ )
@@ -4949,15 +5063,14 @@ disparityUpdate(DisparitySLAM& slam,
     z_vector = dev_z_vector ;
     host_vector<REAL> weights = dev_weights ;
 
-//    if(config.debug){
-//        DEBUG_MSG("Verify disparity to euclidean transformation") ;
-//        for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
-//            cout << x_vector[j] << "," << y_vector[j] << "," << z_vector[j] << endl ;
-//        }
-//    }
+    if(config.debug){
+        DEBUG_MSG("Verify disparity to euclidean transformation") ;
+        for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+            cout << x_vector[j] << "," << y_vector[j] << "," << z_vector[j] << endl ;
+        }
+    }
 
-    int offset = 0 ;
-    REAL weight_sum = 0 ;
+    offset = 0 ;
     for ( int n = 0 ; n < slam.n_particles ; n++ ){
 //        DEBUG_VAL(slam.weights[n]) ;
         int n_particles = merged_sizes[n]*config.particlesPerFeature ;
@@ -4985,22 +5098,25 @@ disparityUpdate(DisparitySLAM& slam,
 
         // update parent particle weights
         slam.weights[n] += weights[n] ;
-        weight_sum += exp(slam.weights[n]) ;
-
-//        DEBUG_VAL(weights[n]) ;
+        if (config.debug)
+            DEBUG_VAL(slam.weights[n]) ;
     }
 
-    if (config.debug){
-        DEBUG_MSG("Updated map particles: ") ;
-        for ( int n = 0 ; n < slam.n_particles ; n++ ){
-            DEBUG_VAL(n) ;
-            slam.maps[n].print() ;
-        }
-    }
+//    if (config.debug){
+//        DEBUG_MSG("Updated map particles: ") ;
+//        for ( int n = 0 ; n < slam.n_particles ; n++ ){
+//            DEBUG_VAL(n) ;
+//            slam.maps[n].print() ;
+//        }
+//    }
 
     // normalize particle weights
+    DEBUG_MSG("normalize weights") ;
+    REAL log_weight_sum = logSumExp(slam.weights) ;
+    DEBUG_VAL(log_weight_sum) ;
     for(int n = 0 ; n < slam.n_particles ; n++ ){
-        slam.weights[n] -= safeLog(weight_sum) ;
-//        DEBUG_VAL(slam.weights[n]) ;
+        slam.weights[n] -= log_weight_sum ;
+        if(config.debug)
+            DEBUG_VAL(slam.weights[n]) ;
     }
 }

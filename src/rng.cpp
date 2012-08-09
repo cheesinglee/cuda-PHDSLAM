@@ -7,9 +7,9 @@
 #include <iostream>
 
 // random number generator engine
-boost::taus88 rng_g(std::time(0)) ;
+boost::mt19937 rng_g(std::time(0)) ;
 boost::normal_distribution<double> normal_dist ;
-boost::variate_generator< boost::taus88, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
+boost::variate_generator< boost::mt19937, boost::normal_distribution<double> > var_gen( rng_g, normal_dist ) ;
 boost::uniform_01<> uni_dist ;
 //bool seeded = false ;
 
