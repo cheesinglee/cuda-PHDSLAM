@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <stdlib.h>
 #include <float.h>
+#include <cmath>
 //#include <eigen3/Eigen/Eigen>
 
 #define REAL float
@@ -278,7 +279,7 @@ public:
     vector<ConstantVelocityState> states ;
     vector<int> resample_idx ;
 
-    ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n,-log(n)),
+    ParticleSLAM(unsigned int n = 100) :  n_particles(n),weights(n - log(n)),
         states(n),resample_idx(n) {}
 
     ParticleSLAM copy_particles(vector<int> indices) {return *this ;}
@@ -310,6 +311,7 @@ public:
         new_particles.cardinalities.clear();
         new_particles.weights.clear();
         new_particles.states.clear();
+        new_particles.n_particles = indices.size() ;
         for ( int n = 0 ; n < indices.size() ; n++ ){
             int i = indices[n] ;
             new_particles.maps_static.push_back(maps_static[i]);
