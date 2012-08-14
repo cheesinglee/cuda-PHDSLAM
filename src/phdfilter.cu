@@ -758,11 +758,12 @@ __global__ void
 phdPredictKernelAckerman(ConstantVelocityState* particles_prior,
                    AckermanControl control,
                    AckermanNoise* noise,
-                   ConstantVelocityState* particles_predict)
+                   ConstantVelocityState* particles_predict,
+                    int n_predict)
 {
     const int tid = threadIdx.x ;
     const int predict_idx = blockIdx.x*blockDim.x + tid ;
-    if (predict_idx < dev_config.n_particles*dev_config.nPredictParticles)
+    if (predict_idx < n_predict)
     {
         // get the prior state from which this prediction is generated
         const int prior_idx = floor((float)predict_idx/dev_config.nPredictParticles) ;
@@ -797,11 +798,12 @@ phdPredictKernelAckerman(ConstantVelocityState* particles_prior,
 
 __global__ void
 phdPredictKernel(ConstantVelocityState* particles_prior,
-        ConstantVelocityNoise* noise, ConstantVelocityState* particles_predict )
+        ConstantVelocityNoise* noise, ConstantVelocityState* particles_predict,
+        int n_predict)
 {
     const int tid = threadIdx.x ;
     const int predict_idx = blockIdx.x*blockDim.x + tid ;
-    if (predict_idx < dev_config.n_particles*dev_config.nPredictParticles)
+    if (predict_idx < n_predict)
     {
         const int prior_idx = floor((float)predict_idx/dev_config.nPredictParticles) ;
         ConstantVelocityState oldState = particles_prior[prior_idx] ;
@@ -1101,13 +1103,13 @@ phdPredict(SynthSLAM& particles, ... )
         int nBlocks = (nPredict+255)/256 ;
         phdPredictKernel
         <<<nBlocks, nThreads>>>
-        ( dev_states_prior,dev_noise,dev_states_predict ) ;
+        ( dev_states_prior,dev_noise,dev_states_predict,nPredict ) ;
 
         cudaFree(dev_noise) ;
     }
     else if( config.motionType == ACKERMAN_MOTION )
     {
-        // read in the control data structure from variable argument lest
+        // read in the control data structure from variable argument list
         va_list argptr ;
         va_start(argptr,particles) ;
         AckermanControl control = (AckermanControl)va_arg(argptr,AckermanControl) ;
@@ -1134,7 +1136,7 @@ phdPredict(SynthSLAM& particles, ... )
         int nBlocks = (nPredict+255)/256 ;
         phdPredictKernelAckerman
         <<<nBlocks, nThreads>>>
-        (dev_states_prior,control,dev_noise,dev_states_predict) ;
+        (dev_states_prior,control,dev_noise,dev_states_predict,nPredict) ;
 
         cudaFree(dev_noise) ;
     }
@@ -1154,37 +1156,56 @@ phdPredict(SynthSLAM& particles, ... )
     // vehicle particles, and downscale particle weights
     if ( config.nPredictParticles > 1 )
     {
+        DEBUG_MSG("Duplicating maps") ;
         vector<vector<Gaussian2D> > maps_predict_static ;
         vector<vector<Gaussian4D> > maps_predict_dynamic ;
         vector<REAL> weights_predict ;
         vector< vector <REAL> > cardinalities_predict ;
-        maps_predict_static.clear();
-        maps_predict_static.reserve(nPredict);
-        maps_predict_dynamic.clear();
-        maps_predict_dynamic.reserve(nPredict);
-        weights_predict.clear();
-        weights_predict.reserve(nPredict);
-        cardinalities_predict.clear();
-        cardinalities_predict.reserve(nPredict);
+        vector<int> resample_idx_predict ;
+//        maps_predict_static.clear();
+//        maps_predict_static.reserve(nPredict);
+//        maps_predict_dynamic.clear();
+//        maps_predict_dynamic.reserve(nPredict);
+//        weights_predict.clear();
+//        weights_predict.reserve(nPredict);
+//        cardinalities_predict.clear();
+//        cardinalities_predict.reserve(nPredict);
+//        resample_idx_predict.reserve(nPredict);
         for ( int i = 0 ; i < n_particles ; i++ )
         {
+
             maps_predict_static.insert( maps_predict_static.end(),
                                         config.nPredictParticles,
                                         particles.maps_static[i] ) ;
+
             maps_predict_dynamic.insert( maps_predict_dynamic.end(),
                                         config.nPredictParticles,
                                         particles.maps_dynamic[i] ) ;
+
             cardinalities_predict.insert( cardinalities_predict.end(),
                                           config.nPredictParticles,
                                           particles.cardinalities[i] ) ;
+
+            float new_weight = particles.weights[i] - safeLog(config.nPredictParticles) ;
+//            DEBUG_VAL(new_weight) ;
             weights_predict.insert( weights_predict.end(), config.nPredictParticles,
-                                    particles.weights[i] - safeLog(config.nPredictParticles) ) ;
+                                    new_weight ) ;
+
+            resample_idx_predict.insert(resample_idx_predict.end(),
+                                        config.nPredictParticles,
+                                        particles.resample_idx[i]) ;
         }
 //        DEBUG_VAL(maps_predict.size()) ;
+        DEBUG_MSG("saving duplicated maps") ;
+        DEBUG_MSG("static") ;
         particles.maps_static = maps_predict_static ;
+        DEBUG_MSG("dynamic") ;
         particles.maps_dynamic = maps_predict_dynamic ;
+         DEBUG_MSG("weights") ;
         particles.weights = weights_predict ;
+        DEBUG_MSG("cardinalities") ;
         particles.cardinalities = cardinalities_predict ;
+        particles.resample_idx = resample_idx_predict ;
         particles.n_particles = nPredict ;
     }
 
@@ -2708,7 +2729,7 @@ phdUpdateMergeKernel(GaussianType* updated_features,
     for ( int p = 0 ; p < n_particles ; p += gridDim.x )
     {
         int map_idx = p + blockIdx.x ;
-        if ( map_idx <= n_particles )
+        if ( map_idx < n_particles )
         {
             // initialize shared vars
             if ( tid == 0)
@@ -3085,9 +3106,80 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
 }
 
 template <class GaussianType>
+/**
+ * @brief pruneMap Prune a gaussian mixture.
+ *
+ * The elements of dev_maps whose corresponding flag equals true are removed
+ * and the resulting array is written back into dev_maps. dev_merged_flags is
+ * also overwritten with an array of the appropriate number of false elements.
+ * map_sizes is overwritten with the sizes of the pruned maps
+ *
+ * @param dev_maps Device pointer to array of gaussian features
+ * @param dev_merged_flags Device array of boolean flags, true = prune.
+ * @param map_sizes Vector of map sizes
+ * @param n_gaussians Total number of gaussians.
+ * @return Total number of gaussians after pruning
+ */
+int
+pruneMap(GaussianType*& dev_maps,
+         bool*& dev_merged_flags,
+         std::vector<int>& map_sizes,
+         int n_gaussians){
+
+    // wrap pointers in thrust types
+    thrust::device_ptr<GaussianType> ptr_maps(dev_maps) ;
+    thrust::device_ptr<bool> ptr_flags(dev_merged_flags) ;
+
+    // create the output vector, with same size as the input
+    thrust::device_vector<GaussianType> dev_pruned(n_gaussians) ;
+
+    // do the pruning
+    thrust::remove_copy_if(ptr_maps,ptr_maps+n_gaussians,
+                    ptr_flags,
+                    dev_pruned.begin(),
+                    thrust::identity<bool>()) ;
+
+    // recalculate map sizes
+    int n_particles = map_sizes.size() ;
+    std::vector<int> map_sizes_pruned(n_particles,0) ;
+    host_vector<bool> flags(ptr_flags,ptr_flags+n_gaussians) ;
+    int n = 0 ;
+    int n_pruned = 0 ;
+    for ( int i = 0 ; i < n_particles ; i++){
+        for( int j = 0 ; j < map_sizes[i] ; j++){
+            if (!flags[n++]){
+                map_sizes_pruned[i]++ ;
+                n_pruned++ ;
+            }
+        }
+    }
+
+//    cout << "pruned features: " << endl ;
+//    for ( int i = 0 ; i < n_pruned ; i++ ){
+//        GaussianType g = dev_pruned[i] ;
+//        print_feature(g) ;
+//    }
+
+    // store pruned results
+    thrust::device_free(ptr_maps) ;
+    ptr_maps = thrust::device_malloc<GaussianType>(n_pruned) ;
+    thrust::copy_n(dev_pruned.begin(),n_pruned,ptr_maps) ;
+    dev_maps = raw_pointer_cast(ptr_maps) ;
+
+    thrust::device_free(ptr_flags) ;
+    ptr_flags = thrust::device_malloc<bool>(n_pruned) ;
+    thrust::fill(ptr_flags,ptr_flags+n_pruned,false) ;
+    dev_merged_flags = raw_pointer_cast(ptr_flags) ;
+
+    map_sizes = map_sizes_pruned ;
+
+    return n_pruned ;
+}
+
+template <class GaussianType>
 void
-mergeAndCopyMaps(GaussianType* dev_maps_updated,
-                 bool* dev_merged_flags,
+mergeAndCopyMaps(GaussianType*& dev_maps_updated,
+                 bool*& dev_merged_flags,
                  vector<GaussianType> features_out1,
                  vector<GaussianType> features_out2,
                  vector<int> n_in_range_vec,
@@ -3115,21 +3207,30 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     int n_out_range1 = features_out1.size() ;
     int n_out_range2 = features_out2.size() ;
 
+    // prune low-weighted features
+    DEBUG_VAL(n_update) ;
+    vector<int> map_sizes_inrange(n_particles) ;
+    for ( int n = 0 ; n < n_particles ; n++){
+        map_sizes_inrange[n] = n_in_range_vec[n]*(n_measure+1) + n_measure ;
+    }
+    int n_pruned = pruneMap(dev_maps_updated,dev_merged_flags,
+                            map_sizes_inrange,n_update) ;
+    DEBUG_VAL(n_pruned) ;
 
 
     // recombine updated in-range map with nearly in-range map do merging
     DEBUG_MSG("Recombining maps") ;
-    combined_size = (n_update+n_out_range2)*sizeof(GaussianType) ;
+    combined_size = (n_pruned+n_out_range2)*sizeof(GaussianType) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
     CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags_combined,
-                                (n_update+n_out_range2)*sizeof(bool) ) ) ;
+                                (n_pruned+n_out_range2)*sizeof(bool) ) ) ;
 
 
     map_offsets[0] = 0 ;
     for ( int n = 0 ; n < n_particles ; n++ )
     {
         // in-range map for particle n
-        int n_in_range_n = n_in_range_vec[n]*(n_measure+1)+n_measure ;
+        int n_in_range_n = map_sizes_inrange[n] ;
         CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
                                     dev_maps_updated+offset_updated,
                                     n_in_range_n*sizeof(GaussianType),
@@ -3164,13 +3265,15 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
     CUDA_SAFE_CALL( cudaMalloc((void**)&dev_n_merged,
                                n_particles*sizeof(int) ) ) ;
     CUDA_SAFE_CALL( cudaMalloc((void**)&dev_map_offsets,
-                               n_particles*sizeof(int) ) ) ;
+                               (n_particles+1)*sizeof(int) ) ) ;
     CUDA_SAFE_CALL( cudaMemcpy( dev_map_offsets, &map_offsets[0],
-                                n_particles*sizeof(int),
+                                (n_particles+1)*sizeof(int),
                                 cudaMemcpyHostToDevice ) ) ;
     CUDA_SAFE_THREAD_SYNC() ;
 
 
+    thrust::device_ptr<bool> ptr_flags(dev_merged_flags_combined) ;
+    thrust::fill(ptr_flags, ptr_flags+n_pruned+n_out_range2,false) ;
 
     DEBUG_MSG("launching phdUpdateMergeKernel") ;
     phdUpdateMergeKernel<<<n_particles,256>>>
@@ -3216,6 +3319,10 @@ mergeAndCopyMaps(GaussianType* dev_maps_updated,
                                     features_out1.begin()+offset_out+n_out_range1_vec[i] ) ;
             offset_out += n_out_range1_vec[i] ;
         }
+//        cout << "Merged map " << i << endl ;
+//        for ( int j = 0 ; j < maps_output[i].size() ; j++ ){
+//            print_feature(maps_output[i][j]) ;
+//        }
     }
 
     free(maps_merged) ;
@@ -3235,6 +3342,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
 
     int n_measure = 0 ;
     int n_particles = particles.n_particles ;
+    DEBUG_VAL(n_particles) ;
     vector<int> map_sizes_static(n_particles,0) ;
     vector<int> map_sizes_dynamic(n_particles,0) ;    
 
@@ -3532,6 +3640,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
     for (int i = 0 ; i < n_particles ; i++ )
     {
         particles.weights[i] -= weightSum ;
+//        DEBUG_VAL(particles.weights[i]) ;
     }
 
     // free memory
@@ -3660,140 +3769,6 @@ template<class GaussianType>
 bool expectedFeaturesPredicate( GaussianType g )
 {
     return (g.weight <= config.minExpectedFeatureWeight) ;
-}
-
-void
-recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
-        vector<REAL>& cn_estimate )
-{
-    if ( particles.n_particles > 1 )
-    {
-        // calculate the weighted mean of the particle poses
-        expectedPose.px = 0 ;
-        expectedPose.py = 0 ;
-        expectedPose.ptheta = 0 ;
-        expectedPose.vx = 0 ;
-        expectedPose.vy = 0 ;
-        expectedPose.vtheta = 0 ;
-        for ( int i = 0 ; i < particles.n_particles ; i++ )
-        {
-            REAL exp_weight = exp(particles.weights[i]) ;
-            expectedPose.px += exp_weight*particles.states[i].px ;
-            expectedPose.py += exp_weight*particles.states[i].py ;
-            expectedPose.ptheta += exp_weight*particles.states[i].ptheta ;
-            expectedPose.vx += exp_weight*particles.states[i].vx ;
-            expectedPose.vy += exp_weight*particles.states[i].vy ;
-            expectedPose.vtheta += exp_weight*particles.states[i].vtheta ;
-        }
-//		gaussianMixture tmpMap = computeExpectedMap(particles) ;
-//		tmpMap.erase(
-//						remove_if( tmpMap.begin(), tmpMap.end(),
-//								expectedFeaturesPredicate),
-//						tmpMap.end() ) ;
-//		*expectedMap = tmpMap ;
-
-        // Maximum a priori estimate
-        REAL max_weight = -FLT_MAX ;
-        int max_idx = -1 ;
-        for ( int i = 0 ; i < particles.n_particles ; i++ )
-        {
-            if ( particles.weights[i] > max_weight )
-            {
-                max_idx = i ;
-                max_weight = particles.weights[i] ;
-            }
-        }
-        DEBUG_VAL(max_idx) ;
-//		expectedPose = particles.states[max_idx] ;
-
-        if ( config.mapEstimate == 0)
-        {
-            particles.map_estimate_static = particles.maps_static[max_idx] ;
-            particles.map_estimate_dynamic = particles.maps_dynamic[max_idx] ;
-        }
-        else
-        {
-//            expectedMap = computeExpectedMap( particles ) ;
-        }
-
-        cn_estimate = particles.cardinalities[max_idx] ;
-    }
-    else
-    {
-//        vector<GaussianType> tmpMap( particles.maps[0] ) ;
-//        tmpMap.erase(
-//                remove_if( tmpMap.begin(), tmpMap.end(),
-//                        expectedFeaturesPredicate),
-//                tmpMap.end() ) ;
-        expectedPose = particles.states[0] ;
-        particles.map_estimate_static = particles.maps_static[0] ;
-        particles.map_estimate_dynamic = particles.maps_dynamic[0] ;
-        cn_estimate = particles.cardinalities[0] ;
-    }
-}
-
-void
-recoverSlamState(DisparitySLAM& particles, ConstantVelocityState3D& expectedPose)
-{
-    if ( particles.n_particles > 1 )
-    {
-        // calculate the weighted mean of the particle poses
-        expectedPose.px = 0 ;
-        expectedPose.py = 0 ;
-        expectedPose.pz = 0 ;
-        expectedPose.proll = 0 ;
-        expectedPose.ppitch = 0 ;
-        expectedPose.pyaw = 0 ;
-        expectedPose.vx = 0 ;
-        expectedPose.vy = 0 ;
-        expectedPose.vz = 0 ;
-        expectedPose.vroll = 0 ;
-        expectedPose.vpitch = 0 ;
-        expectedPose.vyaw = 0 ;
-        for ( int i = 0 ; i < particles.n_particles ; i++ )
-        {
-            REAL exp_weight = exp(particles.weights[i]) ;
-            expectedPose.px += exp_weight*particles.states[i].pose.px ;
-            expectedPose.py += exp_weight*particles.states[i].pose.py ;
-            expectedPose.pz += exp_weight*particles.states[i].pose.pz ;
-            expectedPose.proll += exp_weight*particles.states[i].pose.proll ;
-            expectedPose.ppitch += exp_weight*particles.states[i].pose.ppitch ;
-            expectedPose.pyaw += exp_weight*particles.states[i].pose.pyaw ;
-            expectedPose.vx += exp_weight*particles.states[i].pose.vx ;
-            expectedPose.vy += exp_weight*particles.states[i].pose.vy ;
-            expectedPose.vz += exp_weight*particles.states[i].pose.vz ;
-            expectedPose.vroll += exp_weight*particles.states[i].pose.vroll ;
-            expectedPose.vpitch += exp_weight*particles.states[i].pose.vpitch ;
-            expectedPose.vyaw += exp_weight*particles.states[i].pose.vyaw ;
-        }
-
-        // Maximum a priori estimate
-        REAL max_weight = -FLT_MAX ;
-        int max_idx = -1 ;
-        for ( int i = 0 ; i < particles.n_particles ; i++ )
-        {
-            if ( particles.weights[i] > max_weight )
-            {
-                max_idx = i ;
-                max_weight = particles.weights[i] ;
-            }
-        }
-        DEBUG_VAL(max_idx) ;
-
-        if ( config.mapEstimate == 0)
-        {
-            particles.map_estimate = particles.maps[max_idx] ;
-        }
-        else
-        {
-
-        }
-    }
-    else
-    {
-        expectedPose = particles.states[0].pose ;
-        particles.map_estimate = particles.maps[0] ;
-    }
 }
 
 /// copy the configuration structure to constant device memory

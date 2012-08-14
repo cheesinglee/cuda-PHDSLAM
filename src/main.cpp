@@ -35,6 +35,7 @@
 #include "phdfilter.h"
 #include "disparity.h"
 #include "rng.h"
+#include "gm_reduce.h"
 
 //#define DEBUG
 
@@ -188,22 +189,18 @@ void parseMeasurements(string line,measurementSet& v)
 {
     string value ;
     stringstream ss(line, ios_base::in) ;
-    REAL range, bearing ;
-    int label ;
-    RangeBearingMeasurement *m ;
+
     while( ss.good() )
     {
-        ss >> range ;
-        ss >> bearing ;
-        ss >> label ;
-        m = new RangeBearingMeasurement ;
-        m->range = range ;
-        m->bearing = bearing ;
-        m->label = label ;
-        v.push_back(*m) ;
+        RangeBearingMeasurement m ;
+        ss >> m.range ;
+        ss >> m.bearing ;
+        ss >> m.label ;
+
+        v.push_back(m) ;
     }
-    // TODO: sloppily remove the last invalid measurement (results from newline character?)
-    v.pop_back() ;
+//    // TODO: sloppily remove the last invalid measurement (results from newline character?)
+//    v.pop_back() ;
 }
 
 void parseMeasurements(string line,imageMeasurementSet& set){
@@ -284,6 +281,160 @@ void loadTrajectory( std::string filename, vector<ConstantVelocityState3D>& traj
 void printMeasurement(RangeBearingMeasurement z)
 {
     cout << z.range <<"\t\t" << z.bearing << endl ;
+}
+
+template <class GaussianType>
+vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
+                                        vector<REAL> weights)
+// concatenate all particle maps into a single slam particle and then call the
+// existing gaussian pruning algorithm ;
+{
+    DEBUG_MSG("Computing Expected Map") ;
+    vector<GaussianType> concat ;
+    int n_particles = maps.size() ;
+    int total_features = 0 ;
+    for ( int n = 0 ; n < n_particles ; n++ )
+    {
+        vector<GaussianType> map = maps[n] ;
+        for ( int i = 0 ; i < map.size() ; i++ )
+            map[i].weight *= exp(weights[n]) ;
+        concat.insert( concat.end(), map.begin(), map.end() ) ;
+        total_features += map.size() ;
+    }
+
+    if ( total_features == 0 )
+    {
+        DEBUG_MSG("no features") ;
+        vector<GaussianType> expected_map(0) ;
+        return expected_map ;
+    }
+
+    return reduceGaussianMixture(concat,config.minSeparation) ;
+}
+
+void
+recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
+        vector<REAL>& cn_estimate )
+{
+    if ( particles.n_particles > 1 )
+    {
+        // calculate the weighted mean of the particle poses
+        expectedPose.px = 0 ;
+        expectedPose.py = 0 ;
+        expectedPose.ptheta = 0 ;
+        expectedPose.vx = 0 ;
+        expectedPose.vy = 0 ;
+        expectedPose.vtheta = 0 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            REAL exp_weight = exp(particles.weights[i]) ;
+            expectedPose.px += exp_weight*particles.states[i].px ;
+            expectedPose.py += exp_weight*particles.states[i].py ;
+            expectedPose.ptheta += exp_weight*particles.states[i].ptheta ;
+            expectedPose.vx += exp_weight*particles.states[i].vx ;
+            expectedPose.vy += exp_weight*particles.states[i].vy ;
+            expectedPose.vtheta += exp_weight*particles.states[i].vtheta ;
+        }
+
+        // Maximum a priori estimate
+        REAL max_weight = -FLT_MAX ;
+        int max_idx = -1 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            if ( particles.weights[i] > max_weight )
+            {
+                max_idx = i ;
+                max_weight = particles.weights[i] ;
+            }
+        }
+        DEBUG_VAL(max_idx) ;
+//		expectedPose = particles.states[max_idx] ;
+
+        if ( config.mapEstimate == 0)
+        {
+            particles.map_estimate_static = particles.maps_static[max_idx] ;
+            particles.map_estimate_dynamic = particles.maps_dynamic[max_idx] ;
+        }
+        else
+        {
+            particles.map_estimate_static = computeExpectedMap(
+                        particles.maps_static, particles.weights) ;
+            particles.map_estimate_dynamic = computeExpectedMap(
+                        particles.maps_dynamic,particles.weights) ;
+        }
+
+        cn_estimate = particles.cardinalities[max_idx] ;
+    }
+    else
+    {
+        expectedPose = particles.states[0] ;
+        particles.map_estimate_static = particles.maps_static[0] ;
+        particles.map_estimate_dynamic = particles.maps_dynamic[0] ;
+        cn_estimate = particles.cardinalities[0] ;
+    }
+}
+
+void
+recoverSlamState(DisparitySLAM& particles, ConstantVelocityState3D& expectedPose)
+{
+    if ( particles.n_particles > 1 )
+    {
+        // calculate the weighted mean of the particle poses
+        expectedPose.px = 0 ;
+        expectedPose.py = 0 ;
+        expectedPose.pz = 0 ;
+        expectedPose.proll = 0 ;
+        expectedPose.ppitch = 0 ;
+        expectedPose.pyaw = 0 ;
+        expectedPose.vx = 0 ;
+        expectedPose.vy = 0 ;
+        expectedPose.vz = 0 ;
+        expectedPose.vroll = 0 ;
+        expectedPose.vpitch = 0 ;
+        expectedPose.vyaw = 0 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            REAL exp_weight = exp(particles.weights[i]) ;
+            expectedPose.px += exp_weight*particles.states[i].pose.px ;
+            expectedPose.py += exp_weight*particles.states[i].pose.py ;
+            expectedPose.pz += exp_weight*particles.states[i].pose.pz ;
+            expectedPose.proll += exp_weight*particles.states[i].pose.proll ;
+            expectedPose.ppitch += exp_weight*particles.states[i].pose.ppitch ;
+            expectedPose.pyaw += exp_weight*particles.states[i].pose.pyaw ;
+            expectedPose.vx += exp_weight*particles.states[i].pose.vx ;
+            expectedPose.vy += exp_weight*particles.states[i].pose.vy ;
+            expectedPose.vz += exp_weight*particles.states[i].pose.vz ;
+            expectedPose.vroll += exp_weight*particles.states[i].pose.vroll ;
+            expectedPose.vpitch += exp_weight*particles.states[i].pose.vpitch ;
+            expectedPose.vyaw += exp_weight*particles.states[i].pose.vyaw ;
+        }
+
+        // Maximum a priori estimate
+        REAL max_weight = -FLT_MAX ;
+        int max_idx = -1 ;
+        for ( int i = 0 ; i < particles.n_particles ; i++ )
+        {
+            if ( particles.weights[i] > max_weight )
+            {
+                max_idx = i ;
+                max_weight = particles.weights[i] ;
+            }
+        }
+        DEBUG_VAL(max_idx) ;
+
+        if ( config.mapEstimate == 0)
+        {
+            particles.map_estimate = particles.maps[max_idx] ;
+        }
+        else
+        {
+        }
+    }
+    else
+    {
+        expectedPose = particles.states[0].pose ;
+        particles.map_estimate = particles.maps[0] ;
+    }
 }
 
 template <typename T>
@@ -888,13 +1039,14 @@ void run_synth(bool profile_run){
             exit(1) ;
         }
 
+        // maximum possible number of steps
         nSteps = measurement_times.size() + control_times.size() ;
     }
-    if (nSteps > config.maxSteps && config.maxSteps > 0)
-        nSteps = config.maxSteps ;
+    if (nSteps > n_steps && n_steps > 0)
+        nSteps = n_steps ;
 
     // load trajectory, if required
-    vector<ConstantVelocityState3D> trajVector ;
+    vector<ConstantVelocityState> trajVector ;
     if (config.followTrajectory){
         loadTrajectory(data_dir+"traj.txt",trajVector) ;
         // only need 1 particle
@@ -911,12 +1063,13 @@ void run_synth(bool profile_run){
         particles.states[n].vx = config.vx0 ;
         particles.states[n].vy = config.vy0 ;
         particles.states[n].vtheta = config.vyaw0 ;
-        particles.weights[n] = -log(config.n_particles) ;
+//        particles.weights[n] = -log(config.n_particles) ;
         if ( config.filterType == CPHD_TYPE )
         {
             particles.cardinalities[n].assign( config.maxCardinality+1, -log(config.maxCardinality+1) ) ;
         }
     }
+    particles.weights.assign(config.n_particles,-log(float(config.n_particles)));
 
 //    if ( config.filterType == CPHD_TYPE )
 //    {
@@ -960,11 +1113,20 @@ void run_synth(bool profile_run){
         // get inputs for this time step
         if ( has_timestamps )
         {
+            if (z_idx >= measurement_times.size() || c_idx >= control_times.size()){
+                DEBUG_MSG("no more timestamps") ;
+                break ;
+            }
             if (measurement_times[z_idx] < control_times[c_idx])
             {
                 // next input is a measurement
+                last_time = current_time ;
+                current_time = control_times[c_idx] ;
+                dt = current_time - last_time ;
+                config.dt = dt ;
+                setDeviceConfig(config) ;
                 ZZ = allMeasurements[z_idx++] ;
-                do_predict = false ;
+                do_predict = true ;
             }
             else if ( measurement_times[z_idx] == control_times[c_idx])
             {
@@ -1003,8 +1165,8 @@ void run_synth(bool profile_run){
 
         if (config.followTrajectory){
             // load the next point in the trajectory
-            for ( int n = 0 ; n < slam.n_particles ; n++ )
-                slam.states[n].pose = trajVector[k] ;
+            for ( int i = 0 ; i < particles.n_particles ; i++ )
+                particles.states[i] = trajVector[n] ;
         }
         else if ( n > 0 && do_predict )
         {
@@ -1048,7 +1210,7 @@ void run_synth(bool profile_run){
             nEff += exp(2*particles.weights[i]) ;
         nEff = 1.0/nEff/particles.n_particles ;
         DEBUG_VAL(nEff) ;
-        if (nEff <= config.resampleThresh && ZZ.size() > 0 )
+        if (nEff <= config.resampleThresh && ZZ.size() > 0 || particles.n_particles > 5*config.n_particles)
         {
             DEBUG_MSG("Resampling particles") ;
             particles = resampleParticles(particles,config.n_particles) ;
