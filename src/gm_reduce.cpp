@@ -63,7 +63,7 @@ reduceGaussianMixture(vector<T> gaussians_vec,
 
     // put features in an Eigen wrapper and store in a double-ended queue
     std::deque<GaussianX> gaussians_deque ;
-    for ( int i = 0 ; i < gaussians_vec.size() ; i++ ){
+    for ( unsigned int i = 0 ; i < gaussians_vec.size() ; i++ ){
         GaussianX g(gaussians_vec[i]) ;
         gaussians_deque.push_back(g);
     }
@@ -102,8 +102,9 @@ reduceGaussianMixture(vector<T> gaussians_vec,
 
         // merge gaussians in merge_deque
         GaussianX merge_element = max_element ;
-        for ( int i = 0 ; i < merge_deque.size() ; i++){
-            merge_element.mean += merge_deque[i].mean ;
+        merge_element.mean *= max_element.weight ;
+        for ( unsigned int i = 0 ; i < merge_deque.size() ; i++){
+            merge_element.mean += merge_deque[i].weight*merge_deque[i].mean ;
             merge_element.weight += merge_deque[i].weight ;
         }
         merge_element.mean /= merge_element.weight ;
@@ -111,11 +112,12 @@ reduceGaussianMixture(vector<T> gaussians_vec,
         merge_element.cov = max_element.weight*
                 (max_element.cov + d*d.transpose()) ;
 
-        for ( int i = 0 ; i < merge_deque.size() ; i++){
+        for ( unsigned int i = 0 ; i < merge_deque.size() ; i++){
             d = merge_element.mean - merge_deque[i].mean ;
             merge_element.cov += merge_deque[i].weight*(
                         merge_deque[i].cov + d*d.transpose()) ;
         }
+        merge_element.cov /= merge_element.weight ;
 
         // convert the merged feature back to a non-Eigen-enabled type
         T merge_gaussian ;

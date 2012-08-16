@@ -131,8 +131,8 @@ void serialize(Archive& ar, SynthSLAM& p, const unsigned int version)
         ar & p.cardinality_birth ;
         ar & p.maps_dynamic ;
         ar & p.maps_static ;
-        ar & p.map_estimate_dynamic ;
-        ar & p.map_estimate_static ;
+        ar & p.max_map_dynamic ;
+        ar & p.max_map_static ;
         ar & p.n_particles ;
         ar & p.resample_idx ;
         ar & p.states ;
@@ -289,7 +289,6 @@ vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
 // concatenate all particle maps into a single slam particle and then call the
 // existing gaussian pruning algorithm ;
 {
-    DEBUG_MSG("Computing Expected Map") ;
     vector<GaussianType> concat ;
     int n_particles = maps.size() ;
     int total_features = 0 ;
@@ -336,40 +335,50 @@ recoverSlamState(SynthSLAM& particles, ConstantVelocityState& expectedPose,
             expectedPose.vtheta += exp_weight*particles.states[i].vtheta ;
         }
 
-        // Maximum a priori estimate
-        REAL max_weight = -FLT_MAX ;
-        int max_idx = -1 ;
-        for ( int i = 0 ; i < particles.n_particles ; i++ )
-        {
-            if ( particles.weights[i] > max_weight )
-            {
-                max_idx = i ;
-                max_weight = particles.weights[i] ;
-            }
-        }
-        DEBUG_VAL(max_idx) ;
 //		expectedPose = particles.states[max_idx] ;
 
-        if ( config.mapEstimate == 0)
+        if ( config.mapEstimate & 1)
         {
-            particles.map_estimate_static = particles.maps_static[max_idx] ;
-            particles.map_estimate_dynamic = particles.maps_dynamic[max_idx] ;
-        }
-        else
-        {
-            particles.map_estimate_static = computeExpectedMap(
-                        particles.maps_static, particles.weights) ;
-            particles.map_estimate_dynamic = computeExpectedMap(
-                        particles.maps_dynamic,particles.weights) ;
+            // Maximum a priori map estimate
+            REAL max_weight = -FLT_MAX ;
+            int max_idx = -1 ;
+            for ( int i = 0 ; i < particles.n_particles ; i++ )
+            {
+                if ( particles.weights[i] > max_weight )
+                {
+                    max_idx = i ;
+                    max_weight = particles.weights[i] ;
+                }
+            }
+            DEBUG_VAL(max_idx) ;
+            particles.max_map_static = particles.maps_static[max_idx] ;
+            particles.max_map_dynamic = particles.maps_dynamic[max_idx] ;
+            cn_estimate = particles.cardinalities[max_idx] ;
         }
 
-        cn_estimate = particles.cardinalities[max_idx] ;
+        if ( config.mapEstimate & 2)
+        {
+            // expected a priori map estimate
+            DEBUG_MSG("Computing Expected Static Map") ;
+            particles.exp_map_static = computeExpectedMap(
+                        particles.maps_static, particles.weights) ;
+            DEBUG_MSG("Computing Expected Dynamic Map") ;
+            particles.exp_map_dynamic = computeExpectedMap(
+                        particles.maps_dynamic,particles.weights) ;
+            cn_estimate.clear(); ;
+            for (unsigned int i = 0 ; i < particles.cardinalities.size() ; i++){
+                for (unsigned int j = 0 ; j < cn_estimate.size() ; j++)
+                {
+                    cn_estimate[j] += exp(particles.weights[i])*particles.cardinalities[i][j] ;
+                }
+            }
+        }
     }
     else
     {
         expectedPose = particles.states[0] ;
-        particles.map_estimate_static = particles.maps_static[0] ;
-        particles.map_estimate_dynamic = particles.maps_dynamic[0] ;
+        particles.max_map_static = particles.maps_static[0] ;
+        particles.max_map_dynamic = particles.maps_dynamic[0] ;
         cn_estimate = particles.cardinalities[0] ;
     }
 }
@@ -601,32 +610,54 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
         const char* mapFieldNames[] = {"weights","means","covs"} ;
         mxArray* maps_static = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
         mxArray* maps_dynamic = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
+        mxArray* max_map_static = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
+        mxArray* max_map_dynamic = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
+        mxArray* exp_map_static = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
+        mxArray* exp_map_dynamic = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
         if(config.saveAllMaps)
         {
             write_map_mat( particles.maps_static, maps_static ) ;
             write_map_mat( particles.maps_dynamic, maps_dynamic ) ;
         }
-        else
+        if (config.mapEstimate & 1)
         {
+            // save MAP map estimate
             vector<vector<Gaussian2D> > tmp_static_map_vector ;
             vector<vector<Gaussian4D> > tmp_dynamic_map_vector ;
-            tmp_static_map_vector.push_back( particles.map_estimate_static ) ;
-            tmp_dynamic_map_vector.push_back( particles.map_estimate_dynamic ) ;
-            write_map_mat( tmp_static_map_vector, maps_static ) ;
-            write_map_mat( tmp_dynamic_map_vector, maps_dynamic ) ;
+            tmp_static_map_vector.push_back( particles.max_map_static ) ;
+            tmp_dynamic_map_vector.push_back( particles.max_map_dynamic ) ;
+            write_map_mat( tmp_static_map_vector, max_map_static ) ;
+            write_map_mat( tmp_dynamic_map_vector, max_map_dynamic ) ;
+        }
+
+        if (config.mapEstimate & 2)
+        {
+            // save EAP map estimate
+            vector<vector<Gaussian2D> > tmp_static_map_vector ;
+            vector<vector<Gaussian4D> > tmp_dynamic_map_vector ;
+            tmp_static_map_vector.push_back( particles.exp_map_static ) ;
+            tmp_dynamic_map_vector.push_back( particles.exp_map_dynamic ) ;
+            write_map_mat( tmp_static_map_vector, exp_map_static ) ;
+            write_map_mat( tmp_dynamic_map_vector,exp_map_dynamic ) ;
         }
 
         // assemble final mat-file structure
 //        DEBUG_MSG("assemble mat-file") ;
         const char* particleFieldNames[] = {"states","weights","maps_static",
-                                            "maps_dynamic","resample_idx"} ;
+                                            "maps_dynamic","resample_idx",
+                                            "max_map_static","max_map_dynamic",
+                                            "exp_map_static","exp_map_dynamic"} ;
 //        DEBUG_MSG("mxCreateStructMatrix") ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,5,particleFieldNames) ;
+        mxArray* mxParticles = mxCreateStructMatrix(1,1,9,particleFieldNames) ;
         mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
         mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
         mxSetFieldByNumber( mxParticles, 0, 2, maps_static ) ;
         mxSetFieldByNumber( mxParticles, 0, 3, maps_dynamic ) ;
         mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
+        mxSetFieldByNumber( mxParticles, 0, 5, max_map_static ) ;
+        mxSetFieldByNumber( mxParticles, 0, 6, max_map_dynamic ) ;
+        mxSetFieldByNumber( mxParticles, 0, 7, exp_map_static ) ;
+        mxSetFieldByNumber( mxParticles, 0, 8, exp_map_dynamic ) ;
 
         // write to mat file
         DEBUG_MSG("Write to mat-file") ;

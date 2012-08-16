@@ -7,7 +7,8 @@ SOURCES += src/main.cpp \
    src/phdfilter.cu \
     src/rng.cpp \
     src/slamplot.cpp \
-    src/disparity.cu
+    src/disparity.cu \
+    src/gm_reduce.cpp
 
 HEADERS += \
     src/slamparams.h \
@@ -16,7 +17,7 @@ HEADERS += \
     src/device_math.cuh \
     src/phdfilter.h \
     src/slamplot.h \
-#    src/gaussian_mixture_reduction.h
+    src/gm_reduce.h \
     src/disparity.h
 
 OTHER_FILES += \
