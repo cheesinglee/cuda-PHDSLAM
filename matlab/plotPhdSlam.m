@@ -279,25 +279,40 @@ for i = 1:draw_rate:nSteps
     plot(poses(1,:),poses(2,:),'.') ;
     if (exist('sim','var'))
         plot( sim.traj(1,:), sim.traj(2,:), 'k' )
+%         plot( sim.map(1,:),sim.map(2,:),'k*')
+%         dynamic_features_i = sim.feature_traj(:,i,:) ;
+%         dynamic_features_i = reshape(dynamic_features_i,2,[]) ;
+%         plot( dynamic_features_i(1,:),dynamic_features_i(2,:),'r*') ;
         plot( sim.ground_truth{i}.loc(1,:), sim.ground_truth{i}.loc(2,:),'k*')
-        if ~isempty(sim.ground_truth_dyn{i}.loc)
-            plot( sim.ground_truth_dyn{i}.loc(1,:), sim.ground_truth_dyn{i}.loc(2,:),'g*')
-        end
+        plot( sim.ground_truth_dyn{i}.loc(1,:), sim.ground_truth_dyn{i}.loc(2,:),'g*')
     end
     
     % plot measurements
     if (exist('sim','var'))
         Zi = [sim.z_noisy_static{i},sim.z_noisy_dynamic{i}] ;
-        r = Zi(1,:) ;
-        b = Zi(2,:) + sim.traj(3,i) ;
-        dx = r.*cos(b) ;
-        dy = r.*sin(b) ;
-        x = sim.traj(1,i) + dx ;
-        y = sim.traj(2,i) + dy ;
-        z_lines = zeros(2,numel(x)*2) ;
-        z_lines(:,1:2:end) = [x;y] ;
-        z_lines(:,2:2:end) = repmat(sim.traj(1:2,i),[1,numel(x)]) ;
-        plot(z_lines(1,:),z_lines(2,:),'g-.') 
+        if (size(Zi,2) > 0)
+            r = Zi(1,:) ;
+            b = Zi(2,:) + sim.traj(3,i) ;
+            dx = r.*cos(b) ;
+            dy = r.*sin(b) ;
+            x = sim.traj(1,i) + dx ;
+            y = sim.traj(2,i) + dy ;
+            z_lines = zeros(2,numel(x)*2) ;
+            z_lines(:,1:2:end) = [x;y] ;
+            z_lines(:,2:2:end) = repmat(sim.traj(1:2,i),[1,numel(x)]) ;
+    %         Zki = sim.data(i).measurementsClutter ;
+    %         r = Zki(1,:) ;
+    %         b = Zki(2,:) + sim.traj(3,i) ;
+    %         dx = r.*cos(b) ;
+    %         dy = r.*sin(b) ;
+    %         x = sim.traj(1,i) + dx ;
+    %         y = sim.traj(2,i) + dy ;
+    %         z_lines_clutter = zeros(2,numel(x)*2) ;
+    %         z_lines_clutter(:,1:2:end) = [x;y] ;
+    %         z_lines_clutter(:,2:2:end) = repmat(sim.traj(1:2,i),[1,numel(x)]) ;
+            plot(z_lines(1,:),z_lines(2,:),'g-.') 
+    %         plot(z_lines_clutter(1,:),z_lines_clutter(2,:),'r-.') 
+        end
     end
     
     title(num2str(i))
@@ -404,7 +419,6 @@ for i = 1:draw_rate:nSteps
     frame_counter = frame_counter + 1 ;
 %     keyboard
 end
-
 %%
 if make_movie
     disp('Creating AVI')
@@ -415,3 +429,4 @@ if make_movie
     end
     avi = close(avi) ;
 end
+

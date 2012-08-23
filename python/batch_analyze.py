@@ -3,8 +3,7 @@
 from numpy import *
 from matplotlib import pyplot
 from ospa import ospa_distance
-import tkFileDialog
-import tables
+from scipy.io import loadmat
 from RangeBearingMeasurementModel import *
 import cProfile
 import pstats
@@ -99,43 +98,26 @@ def compute_error(basedir,ground_truth):
 
 
 if __name__ == "__main__":
-    print('loading mat-file...')
-    file = tables.openFile('groundtruth.mat')
-    landmarks = file.root.staticMap[:].transpose()
-    trajectory = file.root.traj[:].transpose()
-    file.close()
-    
-    print('computing ground truth for each time step')
-    sensor_params = {
-        'max_range':10,
-        'max_bearing':pi,
-        'std_range':1.0,
-        'std_bearing':0.0349,
-        'pd':0.95,
-        'clutter_rate':20}
-#    n_steps = trajectory.shape[1] ;
-    n_steps = 1135
-    n_landmarks = landmarks.shape[1]
-    true_maps = [] 
-    observed = zeros(n_landmarks,dtype=bool)
-    measurement_model = RangeBearingMeasurementModel(sensor_params)
-    for k in xrange(n_steps):
-        # check if we have already seen everything
-        if all( observed ):
-            features = landmarks
-        else:
-            pose = trajectory[:,k]
-            in_range = measurement_model.check_in_range(pose,landmarks)
-            observed = logical_or(observed,in_range)
-            features = landmarks[:,observed]
-        true_maps.append(features)
-    ground_truth = {'n_steps':n_steps,'true_maps':true_maps,'true_traj':trajectory}
-    
-    basedir = tkFileDialog.askdirectory()
-    if len(basedir) == 0:
+    import tkFileDialog
+    matfilename = tkFileDialog.askopenfilename(filetypes=[('mat files','.mat')])
+    if len(matfilename) == 0:
         print 'user cancelled selection'
         exit()
-    print basedir
+    basedir = os.path.dirname(matfilename)
+    
+    print('loading mat-file...')
+    sim = loadmat(matfilename)['sim']
+    trajectory = sim['traj'][0,0]
+    ground_truth = sim['groundTruth'][0,0]
+    n_steps = sim['n_steps'][0,0][0,0]
+
+    true_maps = []    
+    for k in xrange(n_steps):
+        loc = ground_truth[0,k][0,0][0]
+        true_maps.append(loc)
+
+    ground_truth = {'n_steps':n_steps,'true_maps':true_maps,'true_traj':trajectory}
+
 #    basedir = '/home/cheesinglee/workspace/cuda-PHDSLAM/batch_results/ackerman3_1cluster/'
     cProfile.run('results=compute_error(basedir,ground_truth)','compute_error_prof')
     stats = pstats.Stats('compute_error_prof')
