@@ -289,16 +289,20 @@ class SynthSLAM : public ParticleSLAM{
 public:
     vector<vector<Gaussian2D> > maps_static ;
     vector<vector<Gaussian4D> > maps_dynamic ;
-    vector<Gaussian2D> map_estimate_static ;
-    vector<Gaussian4D> map_estimate_dynamic ;
+    vector<Gaussian2D> max_map_static ;
+    vector<Gaussian4D> max_map_dynamic ;
+    vector<Gaussian2D> exp_map_static ;
+    vector<Gaussian4D> exp_map_dynamic ;
     vector< vector<REAL> > cardinalities ;
     vector<REAL> cardinality_birth ;
 
     SynthSLAM(unsigned int n) : ParticleSLAM(n),
         maps_static(n),
         maps_dynamic(n),
-        map_estimate_static(),
-        map_estimate_dynamic(),
+        max_map_static(),
+        max_map_dynamic(),
+        exp_map_static(),
+        exp_map_dynamic(),
         cardinalities(n),
         cardinality_birth()
     {
@@ -365,7 +369,7 @@ typedef struct{
      */
     void print(){
         std::cout << "weights = [" ;
-        for ( int i = 0; i < weights.size() ; i++ ){
+        for ( unsigned int i = 0; i < weights.size() ; i++ ){
             if (i > 0){
                 std::cout << "," ;
             }
@@ -377,7 +381,7 @@ typedef struct{
         std::cout << "];" << std::endl ;
 
         std::cout << "particles = [" ;
-        for ( int i = 0 ; i < x.size() ; i++ ){
+        for ( unsigned int i = 0 ; i < x.size() ; i++ ){
             std::cout << x[i] << "," << y[i] << "," << z[i] ;
             if (i < x.size()-1 )
                 std::cout << ";" << std::endl ;
@@ -400,7 +404,7 @@ public:
         new_particles.maps.clear();
         new_particles.weights.clear();
         new_particles.states.clear();
-        for ( int n = 0 ; n < indices.size() ; n++ ){
+        for ( unsigned int n = 0 ; n < indices.size() ; n++ ){
             int i = indices[n] ;
             new_particles.maps.push_back(maps[i]);
             new_particles.weights.push_back(weights[i]);
