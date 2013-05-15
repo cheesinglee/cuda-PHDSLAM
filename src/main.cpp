@@ -590,6 +590,8 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
                                                  mxDOUBLE_CLASS,mxREAL) ;
         mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
                                                       mxINT32_CLASS,mxREAL ) ;
+        mxArray* vars = mxCreateNumericMatrix(nParticles,1,
+                                              mxDOUBLE_CLASS,mxREAL) ;
         int i = 0 ;
         int* ptr_resample = (int*)mxGetData(resample_idx) ;
         for ( unsigned int p = 0 ; p < nParticles ; p++ )
@@ -601,6 +603,7 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
             mxGetPr(states)[i+4] = particles.states[p].vy ;
             mxGetPr(states)[i+5] = particles.states[p].vtheta ;
             mxGetPr(weights)[p] = particles.weights[p] ;
+            mxGetPr(vars)[p] = particles.variances[p] ;
             ptr_resample[p] = particles.resample_idx[p] ;
             i+=6 ;
         }
@@ -643,12 +646,12 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
 
         // assemble final mat-file structure
 //        DEBUG_MSG("assemble mat-file") ;
-        const char* particleFieldNames[] = {"states","weights","maps_static",
+        const char* particleFieldNames[] = {"states","weights","vars","maps_static",
                                             "maps_dynamic","resample_idx",
                                             "max_map_static","max_map_dynamic",
                                             "exp_map_static","exp_map_dynamic"} ;
 //        DEBUG_MSG("mxCreateStructMatrix") ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,9,particleFieldNames) ;
+        mxArray* mxParticles = mxCreateStructMatrix(1,1,10,particleFieldNames) ;
         mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
         mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
         mxSetFieldByNumber( mxParticles, 0, 2, maps_static ) ;
@@ -658,6 +661,7 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
         mxSetFieldByNumber( mxParticles, 0, 6, max_map_dynamic ) ;
         mxSetFieldByNumber( mxParticles, 0, 7, exp_map_static ) ;
         mxSetFieldByNumber( mxParticles, 0, 8, exp_map_dynamic ) ;
+        mxSetFieldByNumber( mxParticles, 0, 9, vars ) ;
 
         // write to mat file
         DEBUG_MSG("Write to mat-file") ;

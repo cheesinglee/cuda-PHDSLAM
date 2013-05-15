@@ -13,10 +13,10 @@ logistic_function(float x, float lower, float upper, float beta, float tau)
 }
 
 /// invert a 2x2 matrix
-__device__ void
+__device__ __host__ void
 invert_matrix2(float *A, float *A_inv)
 {
-    float det = A[0]*A[3] - A[1]*A[2] ;
+    float det = det2(A) ;
     A_inv[0] = A[3]/det ;
     A_inv[1] = -A[1]/det ;
     A_inv[2] = -A[2]/det ;
@@ -26,8 +26,7 @@ invert_matrix2(float *A, float *A_inv)
 /// invert a 3x3 matrix
 __device__ void
 invert_matrix3(float *A, float* A_inv){
-    float det = A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5] -
-            A[0]*A[7]*A[5] - A[3]*A[1]*A[8] - A[6]*A[4]*A[2] ;
+    float det = det3(A) ;
     A_inv[0] = (A[4]*A[8] - A[7]*A[5])/det ;
     A_inv[1] = (A[7]*A[2] - A[1]*A[8])/det ;
     A_inv[2] = (A[1]*A[5] - A[4]*A[2])/det ;
@@ -37,6 +36,28 @@ invert_matrix3(float *A, float* A_inv){
     A_inv[6] = (A[3]*A[7] - A[6]*A[4])/det ;
     A_inv[7] = (A[6]*A[1] - A[0]*A[7])/det ;
     A_inv[8] = (A[0]*A[4] - A[3]*A[1])/det ;
+}
+
+/// product of two 2x2 matrices
+__device__ void
+matmultiply2(float *A, float *B, float *X){
+    X[0] = A[0]*B[0] + A[2]*B[1] ;
+    X[1] = A[1]*B[0] + A[3]*B[1] ;
+    X[2] = A[0]*B[2] + A[2]*B[3] ;
+    X[3] = A[1]*B[2] + A[3]*B[3] ;
+}
+
+/// determinant of a 2x2 matrix
+__device__ float
+det2(float *A){
+    return A[0]*A[3] - A[2]*A[1] ;
+}
+
+/// determinant of a 3x3 matrix
+__device__ float
+det3(float *A){
+    return (A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5])
+        - (A[0]*A[7]*A[5] + A[3]*A[1]*A[8] + A[6]*A[4]*A[2]) ;
 }
 
 /// determinant of a 4x4 matrix
@@ -71,6 +92,79 @@ invert_matrix4( float *A, float *Ainv)
     Ainv[13] = (-A[0] * A[13] * A[10] + A[0] * A[9] * A[14] + A[13] * A[2] * A[8] + A[1] * A[12] * A[10] - A[9] * A[2] * A[12] - A[1] * A[8] * A[14]) / (A[0] * A[5] * A[15] * A[10] - A[0] * A[5] * A[11] * A[14] - A[0] * A[7] * A[13] * A[10] + A[0] * A[11] * A[6] * A[13] - A[0] * A[15] * A[6] * A[9] + A[0] * A[7] * A[9] * A[14] + A[5] * A[3] * A[8] * A[14] - A[5] * A[15] * A[2] * A[8] + A[5] * A[11] * A[2] * A[12] - A[5] * A[3] * A[12] * A[10] - A[15] * A[10] * A[1] * A[4] + A[15] * A[6] * A[1] * A[8] + A[15] * A[2] * A[4] * A[9] + A[3] * A[12] * A[6] * A[9] + A[7] * A[13] * A[2] * A[8] + A[7] * A[1] * A[12] * A[10] + A[3] * A[4] * A[13] * A[10] + A[11] * A[14] * A[1] * A[4] - A[11] * A[6] * A[1] * A[12] - A[11] * A[2] * A[4] * A[13] - A[3] * A[8] * A[6] * A[13] - A[7] * A[9] * A[2] * A[12] - A[7] * A[1] * A[8] * A[14] - A[3] * A[4] * A[9] * A[14]);
     Ainv[14] = -(A[14] * A[0] * A[5] - A[14] * A[1] * A[4] - A[2] * A[12] * A[5] - A[6] * A[0] * A[13] + A[6] * A[1] * A[12] + A[2] * A[4] * A[13]) / (A[0] * A[5] * A[15] * A[10] - A[0] * A[5] * A[11] * A[14] - A[0] * A[7] * A[13] * A[10] + A[0] * A[11] * A[6] * A[13] - A[0] * A[15] * A[6] * A[9] + A[0] * A[7] * A[9] * A[14] + A[5] * A[3] * A[8] * A[14] - A[5] * A[15] * A[2] * A[8] + A[5] * A[11] * A[2] * A[12] - A[5] * A[3] * A[12] * A[10] - A[15] * A[10] * A[1] * A[4] + A[15] * A[6] * A[1] * A[8] + A[15] * A[2] * A[4] * A[9] + A[3] * A[12] * A[6] * A[9] + A[7] * A[13] * A[2] * A[8] + A[7] * A[1] * A[12] * A[10] + A[3] * A[4] * A[13] * A[10] + A[11] * A[14] * A[1] * A[4] - A[11] * A[6] * A[1] * A[12] - A[11] * A[2] * A[4] * A[13] - A[3] * A[8] * A[6] * A[13] - A[7] * A[9] * A[2] * A[12] - A[7] * A[1] * A[8] * A[14] - A[3] * A[4] * A[9] * A[14]);
     Ainv[15] = 0.1e1 / (A[0] * A[5] * A[15] * A[10] - A[0] * A[5] * A[11] * A[14] - A[0] * A[7] * A[13] * A[10] + A[0] * A[11] * A[6] * A[13] - A[0] * A[15] * A[6] * A[9] + A[0] * A[7] * A[9] * A[14] + A[5] * A[3] * A[8] * A[14] - A[5] * A[15] * A[2] * A[8] + A[5] * A[11] * A[2] * A[12] - A[5] * A[3] * A[12] * A[10] - A[15] * A[10] * A[1] * A[4] + A[15] * A[6] * A[1] * A[8] + A[15] * A[2] * A[4] * A[9] + A[3] * A[12] * A[6] * A[9] + A[7] * A[13] * A[2] * A[8] + A[7] * A[1] * A[12] * A[10] + A[3] * A[4] * A[13] * A[10] + A[11] * A[14] * A[1] * A[4] - A[11] * A[6] * A[1] * A[12] - A[11] * A[2] * A[4] * A[13] - A[3] * A[8] * A[6] * A[13] - A[7] * A[9] * A[2] * A[12] - A[7] * A[1] * A[8] * A[14] - A[3] * A[4] * A[9] * A[14]) * (A[10] * A[0] * A[5] - A[10] * A[1] * A[4] - A[2] * A[8] * A[5] - A[6] * A[0] * A[9] + A[6] * A[1] * A[8] + A[2] * A[4] * A[9]);
+}
+
+__device__ float
+evalGaussian(Gaussian2D g, float* p){
+    // distance from mean
+    float d[2] ;
+    d[0] = g.mean[0] - p[0] ;
+    d[1] = g.mean[1] - p[1] ;
+
+    // inverse covariance matrix
+    float* S_inv[4] ;
+    invert_matrix2(g.cov,S_inv);
+
+    // determinant of covariance matrix
+    float det_S = det2(g.cov) ;
+
+    // compute exponential
+    float exponent = 0.5*(d[0]*d[0]*S_inv[0]
+            + d[0]*d[1]*(S_inv[1]+S_inv[2])
+            + d[1]*d[1]*S_inv[3]) ;
+
+    return exp(exponent)/sqrt(det_S)/(2*M_PI)*g.weight ;
+}
+
+__device__ float
+evalLogGaussian(Gaussian2D g, float*p){
+    // distance from mean
+    float d[2] ;
+    d[0] = g.mean[0] - p[0] ;
+    d[1] = g.mean[1] - p[1] ;
+
+    // inverse covariance matrix
+    float* S_inv[4] ;
+    invert_matrix2(g.cov,S_inv);
+
+    // determinant of covariance matrix
+    float det_S = det2(g.cov) ;
+
+    // compute exponential
+    float exponent = 0.5*(d[0]*d[0]*S_inv[0]
+            + d[0]*d[1]*(S_inv[1]+S_inv[2])
+            + d[1]*d[1]*S_inv[3]) ;
+
+    return exponent - safeLog(sqrt(det_S)) - safeLog(2*M_PI) +
+                safeLog(g.weight) ;
+}
+
+__host__ float
+evalGaussianMixture(vector<Gaussian2D> gm, float* x){
+    float result = 0 ;
+    vector<float> d(2) ;
+    float* S_inv[4] ;
+    for (int n = 0 ; n < gm.size() ; n++){
+        float d[0] = gm[n].mean[0] - x[0] ;
+        float d[1] = gm[n].mean[1] - x[1] ;
+        invert_matrix2(gm[n].cov,S_inv);
+        float det_S = det2(gm[n].cov) ;
+        float exponent = 0.5*(d[0]*d[0]*S_inv[0]
+                + d[0]*d[1]*(S_inv[1]+S_inv[2])
+                + d[1]*d[1]*S_inv[3]) ;
+        result += exp(exponent)/sqrt(det_S)/(2*M_PI) ;
+    }
+    return result ;
+}
+
+template <class GaussianType>
+__host__ float
+sumGaussianMixtureWeights(vector<GaussianType> gm){
+    float weight_sum = 0 ;
+    for ( int n = 0 ; n < gm.size() ; n++){
+        weight_sum += gm[n].weight ;
+    }
+    return weight_sum ;
 }
 
 template<class GaussianType>
@@ -258,47 +352,46 @@ computeMahalDist(Gaussian4D a, Gaussian4D b)
 }
 
 /// Compute the Hellinger distance between two Gaussians
-template<class GaussianType>
 __device__ float
-computeHellingerDist( GaussianType a, GaussianType b)
+computeHellingerDist( Gaussian2D a, Gaussian2D b)
 {
     float dist = 0 ;
-//    float innov[2] ;
-//    float sigma[4] ;
-//    float detSigma ;
-//    float sigmaInv[4] = {1,0,0,1} ;
-//    float dist ;
-//    innov[0] = a.mean[0] - b.mean[0] ;
-//    innov[1] = a.mean[1] - b.mean[1] ;
-//    sigma[0] = a.cov[0] + b.cov[0] ;
-//    sigma[1] = a.cov[1] + b.cov[1] ;
-//    sigma[2] = a.cov[2] + b.cov[2] ;
-//    sigma[3] = a.cov[3] + b.cov[3] ;
-//    detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
-//    if (detSigma > FLT_MIN)
-//    {
-//        sigmaInv[0] = sigma[3]/detSigma ;
-//        sigmaInv[1] = -sigma[1]/detSigma ;
-//        sigmaInv[2] = -sigma[2]/detSigma ;
-//        sigmaInv[3] = sigma[0]/detSigma ;
-//    }
-//    float epsilon = -0.25*
-//            (innov[0]*innov[0]*sigmaInv[0] +
-//             innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
-//             innov[1]*innov[1]*sigmaInv[3]) ;
+    float innov[2] ;
+    float sigma[4] ;
+    float detSigma ;
+    float sigmaInv[4] = {1,0,0,1} ;
+    float dist ;
+    innov[0] = a.mean[0] - b.mean[0] ;
+    innov[1] = a.mean[1] - b.mean[1] ;
+    sigma[0] = a.cov[0] + b.cov[0] ;
+    sigma[1] = a.cov[1] + b.cov[1] ;
+    sigma[2] = a.cov[2] + b.cov[2] ;
+    sigma[3] = a.cov[3] + b.cov[3] ;
+    detSigma = det2(sigma) ;
+    if (detSigma > FLT_MIN)
+    {
+        sigmaInv[0] = sigma[3]/detSigma ;
+        sigmaInv[1] = -sigma[1]/detSigma ;
+        sigmaInv[2] = -sigma[2]/detSigma ;
+        sigmaInv[3] = sigma[0]/detSigma ;
+    }
+    float epsilon = -0.25*
+            (innov[0]*innov[0]*sigmaInv[0] +
+             innov[0]*innov[1]*(sigmaInv[1]+sigmaInv[2]) +
+             innov[1]*innov[1]*sigmaInv[3]) ;
 
-//    // determinant of half the sum of covariances
-//    detSigma /= 4 ;
-//    dist = 1/detSigma ;
+    // determinant of half the sum of covariances
+    detSigma /= 4 ;
+    dist = 1/detSigma ;
 
-//    // product of covariances
-//    sigma[0] = a.cov[0]*b.cov[0] + a.cov[2]*b.cov[1] ;
-//    sigma[1] = a.cov[1]*b.cov[0] + a.cov[3]*b.cov[1] ;
-//    sigma[2] = a.cov[0]*b.cov[2] + a.cov[2]*b.cov[3] ;
-//    sigma[3] = a.cov[1]*b.cov[2] + a.cov[3]*b.cov[3] ;
-//    detSigma = sigma[0]*sigma[3] - sigma[1]*sigma[2] ;
-//    dist *= sqrt(detSigma) ;
-//    dist = 1 - sqrt(dist)*exp(epsilon) ;
+    // product of covariances
+    sigma[0] = a.cov[0]*b.cov[0] + a.cov[2]*b.cov[1] ;
+    sigma[1] = a.cov[1]*b.cov[0] + a.cov[3]*b.cov[1] ;
+    sigma[2] = a.cov[0]*b.cov[2] + a.cov[2]*b.cov[3] ;
+    sigma[3] = a.cov[1]*b.cov[2] + a.cov[3]*b.cov[3] ;
+    detSigma = det(sigma) ;
+    dist *= sqrt(detSigma) ;
+    dist = 1 - sqrt(dist)*exp(epsilon) ;
     return dist ;
 }
 
