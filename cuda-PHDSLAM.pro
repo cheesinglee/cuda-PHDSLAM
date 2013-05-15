@@ -17,8 +17,8 @@ HEADERS += \
     src/device_math.cuh \
     src/phdfilter.h \
     src/slamplot.h \
-    src/gm_reduce.h \
-    src/disparity.h
+    src/disparity.h \
+    src/gm_reduce.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -29,8 +29,9 @@ OBJECTS_DIR = $$PROJECT_DIR/Obj
 DESTDIR = $$PROJECT_DIR/bin
 
 QMAKE_CXXFLAGS += -DDEBUG
+QMAKE_CXXFLAGS += -O0 -g
 QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissive -fno-strict-aliasing
-QMAKE_CXXFLAGEs += -j4
+#QMAKE_CXXFLAGS += -j4
 
 # remove qt libs
 CONFIG += dll

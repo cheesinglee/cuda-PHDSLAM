@@ -183,10 +183,11 @@ class Munkres2:
         self.rows = size(C,0)
         self.cols = size(C,1)
         self.K = min( self.rows, self.cols )
-        self.row_covered = zeros(self.rows,dtype=bool)
-        self.col_covered = zeros(self.cols,dtype=bool)
-        self.starred = zeros_like(C,dtype=bool)
-        self.primed = zeros_like(C,dtype=bool)
+        self.row_covered = zeros(self.rows)
+        self.col_covered = zeros(self.cols)
+
+        self.starred = zeros_like(C)
+        self.primed = zeros_like(C)
         self.path = []
         self.next_step = 1
         

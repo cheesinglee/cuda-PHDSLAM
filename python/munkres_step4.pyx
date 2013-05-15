@@ -9,7 +9,7 @@ cdef extern from "math.h":
     double sqrt(double x)
     double pow(double x, double e)
 
-cdef extern from "/usr/lib/python2.7/site-packages/numpy/core/include/numpy/arrayobject.h":
+cdef extern from "/usr/lib/pymodules/python2.7/numpy/core/include/numpy/arrayobject.h":
 
     ctypedef int intp 
 

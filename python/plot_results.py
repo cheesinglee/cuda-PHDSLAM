@@ -114,8 +114,14 @@ def plot_map(basedir,ground_truth):
     
 if __name__ == "__main__":
     import tkFileDialog
-    
-    filenames = tkFileDialog.askopenfilenames()
+    filenames = [] 
+    done = False
+    while not done:
+        name = tkFileDialog.askopenfilename()
+        if len(name) == 0:
+            done = True
+        else:
+            filenames.append(name)
     plot_errors(filenames)
     
 #    import tables
