@@ -4,12 +4,56 @@
 #include "slamtypes.h"
 #include <float.h>
 
+/// a nan-safe logarithm
+__device__ __host__
+float safeLog( float x )
+{
+    if ( x <= 0 )
+        return LOG0 ;
+    else
+        return log(x) ;
+}
+
 /// evaluate generalized logistic function
 __device__ __host__ float
 logistic_function(float x, float lower, float upper, float beta, float tau)
 {
     float y = (upper-lower)/(1+exp(-beta*(x-tau) ) ) ;
     return y ;
+}
+
+/// product of two 2x2 matrices
+__device__ void
+matmultiply2(float *A, float *B, float *X){
+    X[0] = A[0]*B[0] + A[2]*B[1] ;
+    X[1] = A[1]*B[0] + A[3]*B[1] ;
+    X[2] = A[0]*B[2] + A[2]*B[3] ;
+    X[3] = A[1]*B[2] + A[3]*B[3] ;
+}
+
+/// determinant of a 2x2 matrix
+__host__ __device__ float
+det2(float *A){
+    return A[0]*A[3] - A[2]*A[1] ;
+}
+
+/// determinant of a 3x3 matrix
+__host__ __device__ float
+det3(float *A){
+    return (A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5])
+        - (A[0]*A[7]*A[5] + A[3]*A[1]*A[8] + A[6]*A[4]*A[2]) ;
+}
+
+/// determinant of a 4x4 matrix
+__host__ __device__ float
+det4(float *A)
+{
+    float det=0;
+    det+=A[0]*((A[5]*A[10]*A[15]+A[9]*A[14]*A[7]+A[13]*A[6]*A[11])-(A[5]*A[14]*A[11]-A[9]*A[6]*A[15]-A[13]*A[10]*A[7]));
+    det+=A[4]*((A[1]*A[14]*A[11]+A[9]*A[2]*A[15]+A[13]*A[10]*A[3])-(A[1]*A[10]*A[15]-A[9]*A[14]*A[3]-A[13]*A[2]*A[11]));
+    det+=A[8]*((A[1]*A[6]*A[15]+A[5]*A[14]*A[3]+A[13]*A[2]*A[7])-(A[1]*A[14]*A[7]-A[5]*A[2]*A[15]-A[13]*A[6]*A[3]));
+    det+=A[12]*((A[1]*A[10]*A[7]+A[5]*A[2]*A[12]+A[9]*A[10]*A[3])-(A[1]*A[10]*A[12]-A[5]*A[10]*A[3]-A[9]*A[2]*A[7]));
+    return det ;
 }
 
 /// invert a 2x2 matrix
@@ -36,40 +80,6 @@ invert_matrix3(float *A, float* A_inv){
     A_inv[6] = (A[3]*A[7] - A[6]*A[4])/det ;
     A_inv[7] = (A[6]*A[1] - A[0]*A[7])/det ;
     A_inv[8] = (A[0]*A[4] - A[3]*A[1])/det ;
-}
-
-/// product of two 2x2 matrices
-__device__ void
-matmultiply2(float *A, float *B, float *X){
-    X[0] = A[0]*B[0] + A[2]*B[1] ;
-    X[1] = A[1]*B[0] + A[3]*B[1] ;
-    X[2] = A[0]*B[2] + A[2]*B[3] ;
-    X[3] = A[1]*B[2] + A[3]*B[3] ;
-}
-
-/// determinant of a 2x2 matrix
-__device__ float
-det2(float *A){
-    return A[0]*A[3] - A[2]*A[1] ;
-}
-
-/// determinant of a 3x3 matrix
-__device__ float
-det3(float *A){
-    return (A[0]*A[4]*A[8] + A[3]*A[7]*A[2] + A[6]*A[1]*A[5])
-        - (A[0]*A[7]*A[5] + A[3]*A[1]*A[8] + A[6]*A[4]*A[2]) ;
-}
-
-/// determinant of a 4x4 matrix
-__device__ float
-det4(float *A)
-{
-    float det=0;
-    det+=A[0]*((A[5]*A[10]*A[15]+A[9]*A[14]*A[7]+A[13]*A[6]*A[11])-(A[5]*A[14]*A[11]-A[9]*A[6]*A[15]-A[13]*A[10]*A[7]));
-    det+=A[4]*((A[1]*A[14]*A[11]+A[9]*A[2]*A[15]+A[13]*A[10]*A[3])-(A[1]*A[10]*A[15]-A[9]*A[14]*A[3]-A[13]*A[2]*A[11]));
-    det+=A[8]*((A[1]*A[6]*A[15]+A[5]*A[14]*A[3]+A[13]*A[2]*A[7])-(A[1]*A[14]*A[7]-A[5]*A[2]*A[15]-A[13]*A[6]*A[3]));
-    det+=A[12]*((A[1]*A[10]*A[7]+A[5]*A[2]*A[12]+A[9]*A[10]*A[3])-(A[1]*A[10]*A[12]-A[5]*A[10]*A[3]-A[9]*A[2]*A[7]));
-    return det ;
 }
 
 /// invert a 4x4 matrix
@@ -102,7 +112,7 @@ evalGaussian(Gaussian2D g, float* p){
     d[1] = g.mean[1] - p[1] ;
 
     // inverse covariance matrix
-    float* S_inv[4] ;
+    float S_inv[4] ;
     invert_matrix2(g.cov,S_inv);
 
     // determinant of covariance matrix
@@ -124,7 +134,7 @@ evalLogGaussian(Gaussian2D g, float*p){
     d[1] = g.mean[1] - p[1] ;
 
     // inverse covariance matrix
-    float* S_inv[4] ;
+    float S_inv[4] ;
     invert_matrix2(g.cov,S_inv);
 
     // determinant of covariance matrix
@@ -143,10 +153,10 @@ __host__ float
 evalGaussianMixture(vector<Gaussian2D> gm, float* x){
     float result = 0 ;
     vector<float> d(2) ;
-    float* S_inv[4] ;
+    float S_inv[4] ;
     for (int n = 0 ; n < gm.size() ; n++){
-        float d[0] = gm[n].mean[0] - x[0] ;
-        float d[1] = gm[n].mean[1] - x[1] ;
+        d[0] = gm[n].mean[0] - x[0] ;
+        d[1] = gm[n].mean[1] - x[1] ;
         invert_matrix2(gm[n].cov,S_inv);
         float det_S = det2(gm[n].cov) ;
         float exponent = 0.5*(d[0]*d[0]*S_inv[0]
@@ -352,6 +362,13 @@ computeMahalDist(Gaussian4D a, Gaussian4D b)
 }
 
 /// Compute the Hellinger distance between two Gaussians
+template <class T>
+__device__ float
+computeHellingerDist(T a, T b)
+{
+    return 0 ;
+}
+
 __device__ float
 computeHellingerDist( Gaussian2D a, Gaussian2D b)
 {
@@ -360,7 +377,6 @@ computeHellingerDist( Gaussian2D a, Gaussian2D b)
     float sigma[4] ;
     float detSigma ;
     float sigmaInv[4] = {1,0,0,1} ;
-    float dist ;
     innov[0] = a.mean[0] - b.mean[0] ;
     innov[1] = a.mean[1] - b.mean[1] ;
     sigma[0] = a.cov[0] + b.cov[0] ;
@@ -389,21 +405,12 @@ computeHellingerDist( Gaussian2D a, Gaussian2D b)
     sigma[1] = a.cov[1]*b.cov[0] + a.cov[3]*b.cov[1] ;
     sigma[2] = a.cov[0]*b.cov[2] + a.cov[2]*b.cov[3] ;
     sigma[3] = a.cov[1]*b.cov[2] + a.cov[3]*b.cov[3] ;
-    detSigma = det(sigma) ;
+    detSigma = det2(sigma) ;
     dist *= sqrt(detSigma) ;
     dist = 1 - sqrt(dist)*exp(epsilon) ;
     return dist ;
 }
 
-/// a nan-safe logarithm
-__device__ __host__
-float safeLog( float x )
-{
-    if ( x <= 0 )
-        return LOG0 ;
-    else
-        return log(x) ;
-}
 
 //__device__ void
 //cholesky( float*A, float* L, int size)

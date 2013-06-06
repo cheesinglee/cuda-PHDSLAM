@@ -9,8 +9,8 @@
 #include <iterator>
 
 // matlab output
-#include <mex.h>
-#include <mat.h>
+//#include <mex.h>
+//#include <mat.h>
 
 //// pickling tools
 //#include <chooseser.h>
@@ -21,8 +21,12 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <cuda.h>
-#include <cutil_inline.h>
+
+//#include <cuda.h>
+#include <cuda_runtime.h>
+#include <helper_cuda.h>
+
+#include <matio.h>
 
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
@@ -497,78 +501,95 @@ T resampleParticles( T oldParticles, int n_new_particles)
 }
 
 template <class GaussianType>
-void write_map_mat( vector<vector<GaussianType> > maps, mxArray*& ptr_maps)
+void write_map_mat( vector<vector<GaussianType> > maps, matvar_t*& ptr_maps)
 {
-    mwSize n_particles = maps.size() ;
-    mxArray* ptr_weights = NULL ;
-    mxArray* ptr_means = NULL ;
-    mxArray* ptr_covs = NULL ;
+    unsigned int n_particles = maps.size() ;
+    matvar_t* ptr_weights = NULL ;
+    matvar_t* ptr_means = NULL ;
+    matvar_t* ptr_covs = NULL ;
     for ( unsigned int p = 0 ; p < n_particles ; p++ )
     {
         vector<GaussianType> map = maps[p] ;
-        mwSize dims = sizeof(map[0].mean)/sizeof(REAL) ;
-        mwSize map_size = map.size() ;
-        mwSize cov_dims[3] = {dims,dims,map_size} ;
-        ptr_weights = mxCreateNumericMatrix(1,map_size,mxDOUBLE_CLASS,mxREAL) ;
-        ptr_means = mxCreateNumericMatrix(dims,map_size,mxDOUBLE_CLASS,mxREAL) ;
-        ptr_covs = mxCreateNumericArray(3,cov_dims,mxDOUBLE_CLASS,mxREAL) ;
+        size_t dims = sizeof(map[0].mean)/sizeof(REAL) ;
+        size_t map_size = map.size() ;
+
+        vector<double> weights_array(map_size) ;
+        vector<double> means_array(map_size*dims) ;
+        vector<double> covs_array(map_size*dims*dims) ;
         if ( map_size > 0 )
         {
             for ( unsigned int j = 0 ; j < map_size ; j++ )
             {
-                mxGetPr( ptr_weights )[j] = map[j].weight ;
+                weights_array[j] = map[j].weight ;
                 for ( unsigned int k = 0 ; k < dims ; k++ )
                 {
-                    mxGetPr( ptr_means )[dims*j+k] = map[j].mean[k] ;
+                    means_array[dims*j+k] = map[j].mean[k] ;
                 }
                 for ( unsigned int k = 0 ; k < dims*dims ; k++ )
                 {
-                    mxGetPr( ptr_covs )[dims*dims*j+k] = map[j].cov[k] ;
+                    covs_array[dims*dims*j+k] = map[j].cov[k] ;
                 }
             }
         }
-        mxSetFieldByNumber( ptr_maps, p, 0, ptr_weights ) ;
-        mxSetFieldByNumber( ptr_maps, p, 1, ptr_means ) ;
-        mxSetFieldByNumber( ptr_maps, p, 2, ptr_covs ) ;
+        size_t weights_dims[2] ;
+        weights_dims[0] = 1 ;
+        weights_dims[1] = map_size ;
+
+        size_t means_dims[2] ;
+        means_dims[0] = dims ;
+        means_dims[1] = map_size ;
+
+        size_t covs_dims[3]  ;
+        covs_dims[0] = dims ;
+        covs_dims[1] = dims ;
+        covs_dims[2] = map_size ;
+
+        ptr_weights = Mat_VarCreate("weights",MAT_C_DOUBLE,MAT_T_DOUBLE,2,weights_dims,weights_array.data(),0) ;
+        ptr_means = Mat_VarCreate("means",MAT_C_DOUBLE,MAT_T_DOUBLE,2,means_dims,means_array.data(),0) ;
+        ptr_means = Mat_VarCreate("covs",MAT_C_DOUBLE,MAT_T_DOUBLE,3,covs_dims,covs_array.data(),0) ;
+
+        Mat_VarSetStructFieldByName(ptr_maps,"weights",p,ptr_weights) ;
+        Mat_VarSetStructFieldByName(ptr_maps,"means",p,ptr_means) ;
+        Mat_VarSetStructFieldByName(ptr_maps,"covs",p,ptr_covs) ;
     }
 }
 
-void write_map_mat( vector<ParticleMap> maps, mxArray*& ptr_maps)
-{
-    mwSize n_particles = maps.size() ;
-    mxArray* ptr_particles = NULL ;
-    mxArray* ptr_weights = NULL ;
-    for ( unsigned int p = 0 ; p < n_particles ; p++ )
-    {
-        DEBUG_VAL(p) ;
-        ParticleMap map = maps[p] ;
-        mwSize n_features = map.x.size()/config.particlesPerFeature ;
-        mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
-        ptr_particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
-        ptr_weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
-        DEBUG_VAL(n_features) ;
-        if ( n_features > 0 )
-        {
-            mwSize outer_stride = config.particlesPerFeature*3 ;
-            mwSize inner_stride = 3 ;
-            for ( int i = 0 ; i < n_features ; i++ ){
-//                DEBUG_VAL(i) ;
-                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
-//                    DEBUG_VAL(j) ;
-                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride] =
-                            map.x[i*config.particlesPerFeature+j] ;
-                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+1] =
-                            map.y[i*config.particlesPerFeature+j] ;
-                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+2] =
-                            map.z[i*config.particlesPerFeature+j] ;
-                }
-                mxGetPr(ptr_weights)[i] = map.weights[i] ;
-            }
-            mxSetFieldByNumber(ptr_maps,p,1,ptr_weights);
-            mxSetFieldByNumber(ptr_maps,p,0,ptr_particles);
-        }
-    }
-}
+//void write_map_mat( vector<ParticleMap> maps, mxArray*& ptr_maps)
+//{
+//    mwSize n_particles = maps.size() ;
+//    mxArray* ptr_particles = NULL ;
+//    mxArray* ptr_weights = NULL ;
+//    for ( unsigned int p = 0 ; p < n_particles ; p++ )
+//    {
+//        DEBUG_VAL(p) ;
+//        ParticleMap map = maps[p] ;
+//        mwSize n_features = map.x.size()/config.particlesPerFeature ;
+//        mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
+//        ptr_particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
+//        ptr_weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
+//        DEBUG_VAL(n_features) ;
+//        if ( n_features > 0 )
+//        {
+//            mwSize outer_stride = config.particlesPerFeature*3 ;
+//            mwSize inner_stride = 3 ;
+//            for ( int i = 0 ; i < n_features ; i++ ){
+////                DEBUG_VAL(i) ;
+//                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+////                    DEBUG_VAL(j) ;
+//                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride] =
+//                            map.x[i*config.particlesPerFeature+j] ;
+//                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+1] =
+//                            map.y[i*config.particlesPerFeature+j] ;
+//                    mxGetPr(ptr_particles)[i*outer_stride+j*inner_stride+2] =
+//                            map.z[i*config.particlesPerFeature+j] ;
+//                }
+//                mxGetPr(ptr_weights)[i] = map.weights[i] ;
+//            }
+//            mxSetFieldByNumber(ptr_maps,p,1,ptr_weights);
+//            mxSetFieldByNumber(ptr_maps,p,0,ptr_particles);
+//        }
+//    }
+//}
 
 void
 writeParticlesMat(SynthSLAM particles, int t = -1,
@@ -583,40 +604,60 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
 
         // load particle states, weights, and resample indices into mxArrays
 //        DEBUG_MSG("states,weights,resample_idx") ;
-        mwSize nParticles = particles.n_particles ;
-        mxArray* states = mxCreateNumericMatrix(6,nParticles,
-                                                mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
-                                                 mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
-                                                      mxINT32_CLASS,mxREAL ) ;
-        mxArray* vars = mxCreateNumericMatrix(nParticles,1,
-                                              mxDOUBLE_CLASS,mxREAL) ;
+        size_t nParticles = particles.n_particles ;
+//        mxArray* states = mxCreateNumericMatrix(6,nParticles,
+//                                                mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
+//                                                 mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
+//                                                      mxINT32_CLASS,mxREAL ) ;
+//        mxArray* vars = mxCreateNumericMatrix(nParticles,1,
+//                                              mxDOUBLE_CLASS,mxREAL) ;
+        vector<double> states_array(6*nParticles) ;
+        vector<double> weights_array(nParticles) ;
+        vector<int> resample_idx_array(nParticles) ;
+        vector<double> vars_array(nParticles) ;
+
         int i = 0 ;
-        int* ptr_resample = (int*)mxGetData(resample_idx) ;
         for ( unsigned int p = 0 ; p < nParticles ; p++ )
         {
-            mxGetPr(states)[i+0] = particles.states[p].px ;
-            mxGetPr(states)[i+1] = particles.states[p].py ;
-            mxGetPr(states)[i+2] = particles.states[p].ptheta ;
-            mxGetPr(states)[i+3] = particles.states[p].vx ;
-            mxGetPr(states)[i+4] = particles.states[p].vy ;
-            mxGetPr(states)[i+5] = particles.states[p].vtheta ;
-            mxGetPr(weights)[p] = particles.weights[p] ;
-            mxGetPr(vars)[p] = particles.variances[p] ;
-            ptr_resample[p] = particles.resample_idx[p] ;
+            states_array[i+0] = particles.states[p].px ;
+            states_array[i+1] = particles.states[p].py ;
+            states_array[i+2] = particles.states[p].ptheta ;
+            states_array[i+3] = particles.states[p].vx ;
+            states_array[i+4] = particles.states[p].vy ;
+            states_array[i+5] = particles.states[p].vtheta ;
+            weights_array[p] = particles.weights[p] ;
+            vars_array[p] = particles.variances[p] ;
+            resample_idx_array[p] = particles.resample_idx[p] ;
             i+=6 ;
         }
+        size_t states_dims[2] ;
+        states_dims[0] = 6 ;
+        states_dims[1] = nParticles ;
+
+        size_t dims[2] ;
+        dims[0] = 1 ;
+        dims[1] = nParticles ;
+
+        size_t dims1[2] ;
+        dims1[0] = 1 ;
+        dims1[1] = 1 ;
+
+        matvar_t* ptr_states = Mat_VarCreate("states",MAT_C_DOUBLE,MAT_T_DOUBLE,2,states_dims,states_array.data(),0) ;
+        matvar_t* ptr_weights = Mat_VarCreate("weights",MAT_C_DOUBLE,MAT_T_DOUBLE,2,dims,weights_array.data(),0) ;
+        matvar_t* ptr_resample_idx = Mat_VarCreate("resample_idx",MAT_C_INT32,MAT_T_INT32,2,dims,resample_idx_array.data(),0) ;
+        matvar_t* ptr_vars = Mat_VarCreate("vars",MAT_C_DOUBLE,MAT_T_DOUBLE,2,dims,vars_array.data(),0) ;
 
         // copy maps to mxarray
 //        DEBUG_MSG("copy maps") ;
         const char* mapFieldNames[] = {"weights","means","covs"} ;
-        mxArray* maps_static = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
-        mxArray* maps_dynamic = mxCreateStructMatrix(nParticles,1,3,mapFieldNames) ;
-        mxArray* max_map_static = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
-        mxArray* max_map_dynamic = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
-        mxArray* exp_map_static = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
-        mxArray* exp_map_dynamic = mxCreateStructMatrix(1,1,3,mapFieldNames) ;
+        matvar_t* maps_static = Mat_VarCreateStruct("maps_static",2,dims,mapFieldNames,3) ;
+        matvar_t* maps_dynamic = Mat_VarCreateStruct("maps_dynamic",2,dims,mapFieldNames,3) ;
+        matvar_t* max_map_static = Mat_VarCreateStruct("max_map_static",2,dims1,mapFieldNames,3) ;
+        matvar_t* max_map_dynamic = Mat_VarCreateStruct("max_map_dynamic",2,dims1,mapFieldNames,3) ;
+        matvar_t* exp_map_static = Mat_VarCreateStruct("exp_map_static",2,dims1,mapFieldNames,3) ;
+        matvar_t* exp_map_dynamic = Mat_VarCreateStruct("exp_map_dynamic",2,dims1,mapFieldNames,3) ;
         if(config.saveAllMaps)
         {
             write_map_mat( particles.maps_static, maps_static ) ;
@@ -651,160 +692,157 @@ writeParticlesMat(SynthSLAM particles, int t = -1,
                                             "max_map_static","max_map_dynamic",
                                             "exp_map_static","exp_map_dynamic"} ;
 //        DEBUG_MSG("mxCreateStructMatrix") ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,10,particleFieldNames) ;
-        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
-        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
-        mxSetFieldByNumber( mxParticles, 0, 2, maps_static ) ;
-        mxSetFieldByNumber( mxParticles, 0, 3, maps_dynamic ) ;
-        mxSetFieldByNumber( mxParticles, 0, 4, resample_idx ) ;
-        mxSetFieldByNumber( mxParticles, 0, 5, max_map_static ) ;
-        mxSetFieldByNumber( mxParticles, 0, 6, max_map_dynamic ) ;
-        mxSetFieldByNumber( mxParticles, 0, 7, exp_map_static ) ;
-        mxSetFieldByNumber( mxParticles, 0, 8, exp_map_dynamic ) ;
-        mxSetFieldByNumber( mxParticles, 0, 9, vars ) ;
+        matvar_t* ptr_particles = Mat_VarCreateStruct("particles",2,dims1,particleFieldNames,10) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"states",0,ptr_states) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"weights",0,ptr_weights) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"vars",0,ptr_vars) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"maps_static",0,maps_static) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"maps_dynamic",0,maps_dynamic) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"resample_idx",0,ptr_resample_idx) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"max_map_static",0,max_map_static) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"max_map_dynamic",0,max_map_dynamic) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"exp_map_static",0,exp_map_static) ;
+        Mat_VarSetStructFieldByName(ptr_particles,"exp_map_dynamic",0,exp_map_dynamic) ;
 
         // write to mat file
         DEBUG_MSG("Write to mat-file") ;
-        MATFile* matfile = matOpen( matfilename.c_str(), "w" ) ;
-        matPutVariable( matfile, "particles", mxParticles ) ;
-        matClose(matfile) ;
-
-        // clean up
-        DEBUG_MSG("mxDestroyArray") ;
-        mxDestroyArray( mxParticles ) ;
+        mat_t* matfile = Mat_CreateVer(matfilename.c_str(),NULL,MAT_FT_DEFAULT) ;
+        Mat_VarWrite(matfile,ptr_particles,MAT_COMPRESSION_NONE) ;
+        Mat_VarFree(ptr_particles) ;
+        Mat_Close(matfile) ;
 }
 
 void
 writeParticlesMat(DisparitySLAM particles, int t = -1,
                   const char* filename="particles")
 {
-        // create the filename
-        std::ostringstream oss ;
-        oss << filename ;
-        oss << setfill('0') << setw(5) ;
-        oss << t << ".mat" ;
-        std::string matfilename = oss.str() ;
+//        // create the filename
+//        std::ostringstream oss ;
+//        oss << filename ;
+//        oss << setfill('0') << setw(5) ;
+//        oss << t << ".mat" ;
+//        std::string matfilename = oss.str() ;
 
-        // load particle states, weights, and resample indices into mxArrays
-        DEBUG_MSG("states,weights,resample_idx") ;
-        mwSize nParticles = particles.n_particles ;
-        mxArray* states = mxCreateNumericMatrix(12,nParticles,
-                                                mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
-                                                 mxDOUBLE_CLASS,mxREAL) ;
-        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
-                                                      mxINT32_CLASS,mxREAL ) ;
-        int i = 0 ;
-        int* ptr_resample = (int*)mxGetData(resample_idx) ;
-        for ( unsigned int p = 0 ; p < nParticles ; p++ )
-        {
-            mxGetPr(states)[i+0] = particles.states[p].pose.px ;
-            mxGetPr(states)[i+1] = particles.states[p].pose.py ;
-            mxGetPr(states)[i+2] = particles.states[p].pose.pz ;
-            mxGetPr(states)[i+3] = particles.states[p].pose.proll ;
-            mxGetPr(states)[i+4] = particles.states[p].pose.ppitch ;
-            mxGetPr(states)[i+5] = particles.states[p].pose.pyaw ;
-            mxGetPr(states)[i+6] = particles.states[p].pose.vx ;
-            mxGetPr(states)[i+7] = particles.states[p].pose.vy ;
-            mxGetPr(states)[i+8] = particles.states[p].pose.vz ;
-            mxGetPr(states)[i+9] = particles.states[p].pose.vroll ;
-            mxGetPr(states)[i+10] = particles.states[p].pose.vpitch ;
-            mxGetPr(states)[i+11] = particles.states[p].pose.vyaw ;
-            mxGetPr(weights)[p] = particles.weights[p] ;
-            ptr_resample[p] = particles.resample_idx[p] ;
-            i+=12 ;
-        }
+//        // load particle states, weights, and resample indices into mxArrays
+//        DEBUG_MSG("states,weights,resample_idx") ;
+//        mwSize nParticles = particles.n_particles ;
+//        mxArray* states = mxCreateNumericMatrix(12,nParticles,
+//                                                mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* weights = mxCreateNumericMatrix(nParticles,1,
+//                                                 mxDOUBLE_CLASS,mxREAL) ;
+//        mxArray* resample_idx = mxCreateNumericMatrix(nParticles,1,
+//                                                      mxINT32_CLASS,mxREAL ) ;
+//        int i = 0 ;
+//        int* ptr_resample = (int*)mxGetData(resample_idx) ;
+//        for ( unsigned int p = 0 ; p < nParticles ; p++ )
+//        {
+//            mxGetPr(states)[i+0] = particles.states[p].pose.px ;
+//            mxGetPr(states)[i+1] = particles.states[p].pose.py ;
+//            mxGetPr(states)[i+2] = particles.states[p].pose.pz ;
+//            mxGetPr(states)[i+3] = particles.states[p].pose.proll ;
+//            mxGetPr(states)[i+4] = particles.states[p].pose.ppitch ;
+//            mxGetPr(states)[i+5] = particles.states[p].pose.pyaw ;
+//            mxGetPr(states)[i+6] = particles.states[p].pose.vx ;
+//            mxGetPr(states)[i+7] = particles.states[p].pose.vy ;
+//            mxGetPr(states)[i+8] = particles.states[p].pose.vz ;
+//            mxGetPr(states)[i+9] = particles.states[p].pose.vroll ;
+//            mxGetPr(states)[i+10] = particles.states[p].pose.vpitch ;
+//            mxGetPr(states)[i+11] = particles.states[p].pose.vyaw ;
+//            mxGetPr(weights)[p] = particles.weights[p] ;
+//            ptr_resample[p] = particles.resample_idx[p] ;
+//            i+=12 ;
+//        }
 
-        // copy maps to mxarray
-        DEBUG_MSG("copy maps") ;
-        const char* field_names[] = {"particles","weights"} ;
-        mxArray* maps = mxCreateStructMatrix(nParticles,1,2,field_names) ;
-        if(config.saveAllMaps)
-        {
-            write_map_mat( particles.maps, maps ) ;
-        }
-        else
-        {
-            maps = mxCreateStructMatrix(1,1,2,field_names) ;
+//        // copy maps to mxarray
+//        DEBUG_MSG("copy maps") ;
+//        const char* field_names[] = {"particles","weights"} ;
+//        mxArray* maps = mxCreateStructMatrix(nParticles,1,2,field_names) ;
+//        if(config.saveAllMaps)
+//        {
+//            write_map_mat( particles.maps, maps ) ;
+//        }
+//        else
+//        {
+//            maps = mxCreateStructMatrix(1,1,2,field_names) ;
 
-            ParticleMap map = particles.map_estimate ;
-            mwSize n_features = map.x.size()/config.particlesPerFeature ;
-            mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
-            mxArray* particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
-            mxArray* weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
+//            ParticleMap map = particles.map_estimate ;
+//            mwSize n_features = map.x.size()/config.particlesPerFeature ;
+//            mwSize dims[3] = {3,config.particlesPerFeature,n_features} ;
+//            mxArray* particles = mxCreateNumericArray(3,dims,mxDOUBLE_CLASS,mxREAL) ;
+//            mxArray* weights = mxCreateNumericMatrix(1,n_features,mxDOUBLE_CLASS,mxREAL) ;
 
-            mwSize outer_stride = config.particlesPerFeature*3 ;
-            mwSize inner_stride = 3 ;
-            for ( int i = 0 ; i < n_features ; i++ ){
-                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
-                    mxGetPr(particles)[i*outer_stride+j*inner_stride] =
-                            map.x[i*config.particlesPerFeature+j] ;
-                    mxGetPr(particles)[i*outer_stride+j*inner_stride+1] =
-                            map.y[i*config.particlesPerFeature+j] ;
-                    mxGetPr(particles)[i*outer_stride+j*inner_stride+2] =
-                            map.z[i*config.particlesPerFeature+j] ;
-                 }
-                mxGetPr(weights)[i] = map.weights[i] ;
-            }
-//            for ( int i = 0; i < n_features ; i++ ){
-//                DEBUG_VAL(mxGetPr(weights)[i]) ;
+//            mwSize outer_stride = config.particlesPerFeature*3 ;
+//            mwSize inner_stride = 3 ;
+//            for ( int i = 0 ; i < n_features ; i++ ){
+//                for( int j = 0 ; j < config.particlesPerFeature ; j++ ){
+//                    mxGetPr(particles)[i*outer_stride+j*inner_stride] =
+//                            map.x[i*config.particlesPerFeature+j] ;
+//                    mxGetPr(particles)[i*outer_stride+j*inner_stride+1] =
+//                            map.y[i*config.particlesPerFeature+j] ;
+//                    mxGetPr(particles)[i*outer_stride+j*inner_stride+2] =
+//                            map.z[i*config.particlesPerFeature+j] ;
+//                 }
+//                mxGetPr(weights)[i] = map.weights[i] ;
 //            }
+////            for ( int i = 0; i < n_features ; i++ ){
+////                DEBUG_VAL(mxGetPr(weights)[i]) ;
+////            }
 
-            DEBUG_MSG("setfield particles") ;
-            mxSetFieldByNumber(maps,0,0,particles);
-            DEBUG_MSG("setfield weights") ;
-            mxSetFieldByNumber(maps,0,1,weights);
-        }
+//            DEBUG_MSG("setfield particles") ;
+//            mxSetFieldByNumber(maps,0,0,particles);
+//            DEBUG_MSG("setfield weights") ;
+//            mxSetFieldByNumber(maps,0,1,weights);
+//        }
 
-        // assemble final mat-file structure
-        DEBUG_MSG("assemble mat-file") ;
-        const char* particleFieldNames[] = {"states","weights","maps",
-                                            "resample_idx"} ;
-//        DEBUG_MSG("mxCreateStructMatrix") ;
-        mxArray* mxParticles = mxCreateStructMatrix(1,1,4,particleFieldNames) ;
-//        DEBUG_MSG("states") ;
-        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
-//        DEBUG_MSG("weights") ;
-        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
-//        DEBUG_MSG("maps_static") ;
-        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
-//        DEBUG_MSG("resample_idx") ;
-        mxSetFieldByNumber( mxParticles, 0, 3, resample_idx ) ;
+//        // assemble final mat-file structure
+//        DEBUG_MSG("assemble mat-file") ;
+//        const char* particleFieldNames[] = {"states","weights","maps",
+//                                            "resample_idx"} ;
+////        DEBUG_MSG("mxCreateStructMatrix") ;
+//        mxArray* mxParticles = mxCreateStructMatrix(1,1,4,particleFieldNames) ;
+////        DEBUG_MSG("states") ;
+//        mxSetFieldByNumber( mxParticles, 0, 0, states ) ;
+////        DEBUG_MSG("weights") ;
+//        mxSetFieldByNumber( mxParticles, 0, 1, weights ) ;
+////        DEBUG_MSG("maps_static") ;
+//        mxSetFieldByNumber( mxParticles, 0, 2, maps ) ;
+////        DEBUG_MSG("resample_idx") ;
+//        mxSetFieldByNumber( mxParticles, 0, 3, resample_idx ) ;
 
-        // write to mat file
-        DEBUG_MSG("Write to mat-file") ;
-        MATFile* matfile = matOpen( matfilename.c_str(), "w" ) ;
-        matPutVariable( matfile, "particles", mxParticles ) ;
-        matClose(matfile) ;
+//        // write to mat file
+//        DEBUG_MSG("Write to mat-file") ;
+//        MATFile* matfile = matOpen( matfilename.c_str(), "w" ) ;
+//        matPutVariable( matfile, "particles", mxParticles ) ;
+//        matClose(matfile) ;
 
-        // clean up
-        DEBUG_MSG("mxDestroyArray") ;
-        mxDestroyArray( mxParticles ) ;
-}
+//        // clean up
+//        DEBUG_MSG("mxDestroyArray") ;
+//        mxDestroyArray( mxParticles ) ;
+//}
 
-/// write a vector of features as a single line to an output stream,
-/// with a terminating newline
-template <class GaussianType>
-void write_map(ostream out, vector<GaussianType> map)
-{
-    int n_features = map.size() ;
-    if ( n_features > 0 )
-    {
-        int dims = sizeof(map[0].mean)/sizeof(REAL) ;
-        for ( int n = 0 ; n < (int)map.size() ; n++ )
-        {
-            out << map[n].weight << " " ;
-            for (int i = 0 ; i < dims ; i++ )
-            {
-                out << map[n].mean[i] << " " ;
-            }
-            for (int i = 0 ; i < dims*dims ; i++ )
-            {
-                out << map[n].cov[i] << " " ;
-            }
-        }
-    }
-    out << endl ;
+///// write a vector of features as a single line to an output stream,
+///// with a terminating newline
+//template <class GaussianType>
+//void write_map(ostream out, vector<GaussianType> map)
+//{
+//    int n_features = map.size() ;
+//    if ( n_features > 0 )
+//    {
+//        int dims = sizeof(map[0].mean)/sizeof(REAL) ;
+//        for ( int n = 0 ; n < (int)map.size() ; n++ )
+//        {
+//            out << map[n].weight << " " ;
+//            for (int i = 0 ; i < dims ; i++ )
+//            {
+//                out << map[n].mean[i] << " " ;
+//            }
+//            for (int i = 0 ; i < dims*dims ; i++ )
+//            {
+//                out << map[n].cov[i] << " " ;
+//            }
+//        }
+//    }
+//    out << endl ;
 }
 
 void writeLog(const SynthSLAM& particles, ConstantVelocityState expectedPose,
@@ -1245,7 +1283,7 @@ void run_synth(bool profile_run){
             nEff += exp(2*particles.weights[i]) ;
         nEff = 1.0/nEff/particles.n_particles ;
         DEBUG_VAL(nEff) ;
-        if (nEff <= config.resampleThresh && ZZ.size() > 0 || particles.n_particles > 5*config.n_particles)
+        if (( nEff <= config.resampleThresh && ZZ.size() > 0) || particles.n_particles > 5*config.n_particles)
         {
             DEBUG_MSG("Resampling particles") ;
             particles = resampleParticles(particles,config.n_particles) ;
@@ -1405,10 +1443,10 @@ int main(int argc, char *argv[])
 {
     // check cuda device properties
     int nDevices ;
-    CUDA_SAFE_CALL(cudaGetDeviceCount( &nDevices )) ;
+    checkCudaErrors(cudaGetDeviceCount( &nDevices )) ;
     cout << "Found " << nDevices << " CUDA Devices" << endl ;
     cudaDeviceProp props ;
-    CUDA_SAFE_CALL(cudaGetDeviceProperties( &props, 0 )) ;
+    checkCudaErrors(cudaGetDeviceProperties( &props, 0 )) ;
     cout << "Device name: " << props.name << endl ;
     cout << "Compute capability: " << props.major << "." << props.minor << endl ;
     deviceMemLimit = props.totalGlobalMem*0.95 ;

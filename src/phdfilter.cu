@@ -21,7 +21,6 @@
 #include <cstdarg>
 #include "slamtypes.h"
 //#include "slamparams.h"
-#include <cutil.h>
 //#include <complex.h>
 //#include <fftw3.h>
 #include <assert.h>
@@ -29,6 +28,8 @@
 #include "cuPrintf.cu"
 
 #include "device_math.cuh"
+
+#include <helper_cuda.h>
 
 #include <thrust/version.h>
 #include <thrust/host_vector.h>
@@ -729,20 +730,20 @@ computePreUpdate( ConstantVelocityState pose, Gaussian4D feature_predict,
 //    {
 //        log_factorials[n] = log_factorials[n-1] + safeLog((REAL)n) ;
 //    }
-//    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_C,
+//    checkCudaErrors( cudaMalloc( (void**)&dev_C,
 //                                pow(config.maxCardinality+1,2)*sizeof(REAL) ) ) ;
-//    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_factorial,
+//    checkCudaErrors( cudaMalloc( (void**)&dev_factorial,
 //                                (config.maxCardinality+1)*sizeof(REAL) ) ) ;
-//    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_cn_clutter,
+//    checkCudaErrors( cudaMalloc( (void**)&dev_cn_clutter,
 //                                (config.maxCardinality+1)*sizeof(REAL) ) ) ;
-//    CUDA_SAFE_CALL( cudaMemcpy( dev_factorial, &log_factorials[0],
+//    checkCudaErrors( cudaMemcpy( dev_factorial, &log_factorials[0],
 //                                (config.maxCardinality+1)*sizeof(REAL),
 //                                cudaMemcpyHostToDevice ) ) ;
-//    CUDA_SAFE_THREAD_SYNC() ;
-////	CUDA_SAFE_CALL(
+//    //
+////	checkCudaErrors(
 ////				cudaMalloc( (void**)&dev_pspower,
 ////							(config.maxCardinality+1)*sizeof(REAL) ) ) ;
-////	CUDA_SAFE_CALL(
+////	checkCudaErrors(
 ////				cudaMalloc( (void**)&dev_qspower,
 ////							(config.maxCardinality+1)*sizeof(REAL) ) ) ;
 
@@ -750,7 +751,7 @@ computePreUpdate( ConstantVelocityState pose, Gaussian4D feature_predict,
 //    int n_threads = n_blocks ;
 //    cphdConstantsKernel<<<n_blocks, n_threads, n_threads*sizeof(REAL)>>>
 //        ( dev_factorial, dev_C, dev_cn_clutter ) ;
-//    CUDA_SAFE_THREAD_SYNC() ;
+//    //
 //}
 
 /// kernel for particle prediction with an ackerman steering motion model
@@ -945,13 +946,13 @@ predictMapMixed(SynthSLAM& particles)
     Gaussian4D* dev_features_prior = NULL ;
     Gaussian4D* dev_features_predict = NULL ;
     Gaussian2D* dev_features_jump = NULL ;
-    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_prior,
+    checkCudaErrors(cudaMalloc((void**)&dev_features_prior,
                               n_features*sizeof(Gaussian4D) ) ) ;
-    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_predict,
+    checkCudaErrors(cudaMalloc((void**)&dev_features_predict,
                               n_features*sizeof(Gaussian4D) ) ) ;
-    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_jump,
+    checkCudaErrors(cudaMalloc((void**)&dev_features_jump,
                               n_features*sizeof(Gaussian2D) ) ) ;
-    CUDA_SAFE_CALL(cudaMemcpy(dev_features_prior,&all_features[0],
+    checkCudaErrors(cudaMemcpy(dev_features_prior,&all_features[0],
                               n_features*sizeof(Gaussian4D),
                               cudaMemcpyHostToDevice) ) ;
     int n_blocks = (n_features+255)/256 ;
@@ -967,10 +968,10 @@ predictMapMixed(SynthSLAM& particles)
 
     // copy results from device
     vector<Gaussian2D> all_features_jump( all_features.size() ) ;
-    CUDA_SAFE_CALL(cudaMemcpy(&all_features[0],dev_features_predict,
+    checkCudaErrors(cudaMemcpy(&all_features[0],dev_features_predict,
                               n_features*sizeof(Gaussian4D),
                               cudaMemcpyDeviceToHost)) ;
-    CUDA_SAFE_CALL(cudaMemcpy(&all_features_jump[0],dev_features_jump,
+    checkCudaErrors(cudaMemcpy(&all_features_jump[0],dev_features_jump,
                               n_features*sizeof(Gaussian2D),
                               cudaMemcpyDeviceToHost)) ;
     // load predicted features back into particles
@@ -1001,9 +1002,9 @@ predictMapMixed(SynthSLAM& particles)
     }
 
     // free memory
-    CUDA_SAFE_CALL( cudaFree( dev_features_prior ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_features_predict ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_features_jump ) ) ;
+    checkCudaErrors( cudaFree( dev_features_prior ) ) ;
+    checkCudaErrors( cudaFree( dev_features_predict ) ) ;
+    checkCudaErrors( cudaFree( dev_features_jump ) ) ;
 }
 
 //template <class GaussianType>
@@ -1015,11 +1016,11 @@ predictMapMixed(SynthSLAM& particles)
 //    int n_features = all_features.size() ;
 //    GaussianType* dev_features_prior = NULL ;
 //    GaussianType* dev_features_predict = NULL ;
-//    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_prior,
+//    checkCudaErrors(cudaMalloc((void**)&dev_features_prior,
 //                              n_features*sizeof(Gaussian4D) ) ) ;
-//    CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_predict,
+//    checkCudaErrors(cudaMalloc((void**)&dev_features_predict,
 //                              n_features*sizeof(Gaussian4D) ) ) ;
-//    CUDA_SAFE_CALL(cudaMemcpy(dev_features_prior,&all_features[0],
+//    checkCudaErrors(cudaMemcpy(dev_features_prior,&all_features[0],
 //                              n_features*sizeof(Gaussian4D),
 //                              cudaMemcpyHostToDevice) ) ;
 //    int n_blocks = (n_features+255)/256 ;
@@ -1028,7 +1029,7 @@ predictMapMixed(SynthSLAM& particles)
 //    motion_model.std_accy = config.stdAyMap ;
 //    predictMapKernel<<<n_blocks,256>>>
 //        (dev_features_prior,motion_model,n_features, dev_features_predict ) ;
-//    CUDA_SAFE_CALL(cudaMemcpy(&all_features[0],dev_features_predict,
+//    checkCudaErrors(cudaMemcpy(&all_features[0],dev_features_predict,
 //                              n_features*sizeof(GaussianType),
 //                              cudaMemcpyDeviceToHost)) ;
 //    // load predicted features back into particles
@@ -1044,8 +1045,8 @@ predictMapMixed(SynthSLAM& particles)
 //            end += particles.maps_dynamic[n+1].size() ;
 //        }
 //    }
-//    CUDA_SAFE_CALL( cudaFree( dev_features_prior ) ) ;
-//    CUDA_SAFE_CALL( cudaFree( dev_features_predict ) ) ;
+//    checkCudaErrors( cudaFree( dev_features_prior ) ) ;
+//    checkCudaErrors( cudaFree( dev_features_predict ) ) ;
 //}
 
 /// host-side helper function for PHD filter prediction
@@ -1064,15 +1065,15 @@ phdPredict(SynthSLAM& particles, ... )
     // allocate device memory
     ConstantVelocityState* dev_states_prior = NULL ;
     ConstantVelocityState* dev_states_predict = NULL ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc((void**)&dev_states_prior,
                            n_particles*sizeof(ConstantVelocityState) ) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc((void**)&dev_states_predict,
                            nPredict*sizeof(ConstantVelocityState) ) ) ;
 
     // copy inputs
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMemcpy(dev_states_prior, &particles.states[0],
                            n_particles*sizeof(ConstantVelocityState),
                             cudaMemcpyHostToDevice) ) ;
@@ -1090,10 +1091,10 @@ phdPredict(SynthSLAM& particles, ... )
         }
 
         ConstantVelocityNoise* dev_noise = NULL ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc((void**)&dev_noise,
                                n_particles*sizeof(ConstantVelocityNoise) ) ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMemcpy(dev_noise, &noiseVector[0],
                                n_particles*sizeof(ConstantVelocityNoise),
                                cudaMemcpyHostToDevice) ) ;
@@ -1123,10 +1124,10 @@ phdPredict(SynthSLAM& particles, ... )
             noiseVector[i].n_encoder = config.stdEncoder * randn() ;
         }
         AckermanNoise* dev_noise = NULL ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc((void**)&dev_noise,
                                nPredict*sizeof(AckermanNoise) ) ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMemcpy(dev_noise, &noiseVector[0],
                                nPredict*sizeof(AckermanNoise),
                                cudaMemcpyHostToDevice) ) ;
@@ -1145,7 +1146,7 @@ phdPredict(SynthSLAM& particles, ... )
     // copy results from device
     ConstantVelocityState* states_predict = (ConstantVelocityState*)
                                             malloc(nPredict*sizeof(ConstantVelocityState)) ;
-    CUDA_SAFE_CALL(cudaMemcpy(states_predict, dev_states_predict,
+    checkCudaErrors(cudaMemcpy(states_predict, dev_states_predict,
                               nPredict*sizeof(ConstantVelocityState),
                               cudaMemcpyDeviceToHost) ) ;
     particles.states.assign( states_predict, states_predict+nPredict ) ;
@@ -1223,8 +1224,8 @@ phdPredict(SynthSLAM& particles, ... )
     predictTimeFile.close() ;
 
     // clean up
-    CUDA_SAFE_CALL( cudaFree( dev_states_prior ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_states_predict ) ) ;
+    checkCudaErrors( cudaFree( dev_states_prior ) ) ;
+    checkCudaErrors( cudaFree( dev_states_predict ) ) ;
     free(states_predict) ;
 }
 
@@ -2941,7 +2942,7 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
     }
 
     // allocate device space for map sizes
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc( (void**)&dev_map_sizes,
                             n_particles*sizeof(int) ) ) ;
 
@@ -2954,26 +2955,26 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
         ///////////////////////////////////////////////////////////////////////
 
         // allocate device memory
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc( (void**)&dev_maps,
                                 total_features*sizeof(GaussianType) ) ) ;;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc( (void**)&dev_n_in_range,
                                 n_particles*sizeof(int) ) ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc( (void**)&dev_n_out_range2,
                                 n_particles*sizeof(int) ) ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMalloc( (void**)&dev_in_range,
                                 total_features*sizeof(char) ) ) ;
 
 
         // copy inputs
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
             cudaMemcpy( dev_maps, &concat[0], total_features*sizeof(GaussianType),
                         cudaMemcpyHostToDevice )
         ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMemcpy( dev_map_sizes, &map_sizes[0], n_particles*sizeof(int),
                         cudaMemcpyHostToDevice )
         ) ;
@@ -2985,22 +2986,21 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
         computeInRangeKernel<<<n_particles,nThreads>>>
             ( dev_maps, dev_map_sizes, n_particles, dev_poses, dev_in_range,
               dev_n_in_range, dev_n_out_range2 ) ;
-        CUDA_SAFE_THREAD_SYNC();
 
         // allocate outputs
         in_range.resize(total_features);
 
         // copy outputs
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
                     cudaMemcpy( &in_range[0],dev_in_range,
                                 total_features*sizeof(char),
                                 cudaMemcpyDeviceToHost )
         ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
             cudaMemcpy( &n_in_range_vec[0],dev_n_in_range,n_particles*sizeof(int),
                         cudaMemcpyDeviceToHost )
         ) ;
-        CUDA_SAFE_CALL(
+        checkCudaErrors(
             cudaMemcpy( &n_out_range2_vec[0],dev_n_out_range2,n_particles*sizeof(int),
                         cudaMemcpyDeviceToHost )
         ) ;
@@ -3034,9 +3034,9 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
         }
 
         // free memory
-        CUDA_SAFE_CALL( cudaFree( dev_maps ) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_in_range ) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_n_in_range ) ) ;
+        checkCudaErrors( cudaFree( dev_maps ) ) ;
+        checkCudaErrors( cudaFree( dev_in_range ) ) ;
+        checkCudaErrors( cudaFree( dev_n_in_range ) ) ;
 
 
         // perform an (inclusive) prefix scan on the map sizes to determine indexing
@@ -3056,26 +3056,26 @@ prepareUpdateInputs(vector<vector<GaussianType> > maps,
     int n_update = n_in_range*(n_measure+1) + n_measure*n_particles ;
 
     // allocate device memory
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                     cudaMalloc( (void**)&dev_maps_inrange,
                                 n_in_range*sizeof(GaussianType) ) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                     cudaMalloc( (void**)&dev_map_offsets,
                                 (n_particles+1)*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc((void**)&dev_maps_updated,
                            n_update*sizeof(GaussianType)) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc((void**)&dev_merged_flags,
                            n_update*sizeof(bool)) ) ;
 
     // copy inputs
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
         cudaMemcpy( dev_maps_inrange, &features_in[0],
                     n_in_range*sizeof(GaussianType),
                     cudaMemcpyHostToDevice )
     ) ;
-    CUDA_SAFE_CALL( cudaMemcpy( dev_map_offsets, &map_offsets_in[0],
+    checkCudaErrors( cudaMemcpy( dev_map_offsets, &map_offsets_in[0],
                                 (n_particles+1)*sizeof(int),
                                 cudaMemcpyHostToDevice ) ) ;
 }
@@ -3196,8 +3196,8 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     // recombine updated in-range map with nearly in-range map do merging
     DEBUG_MSG("Recombining maps") ;
     combined_size = (n_pruned+n_out_range2)*sizeof(GaussianType) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags_combined,
+    checkCudaErrors( cudaMalloc( (void**)&dev_maps_combined, combined_size ) ) ;
+    checkCudaErrors( cudaMalloc( (void**)&dev_merged_flags_combined,
                                 (n_pruned+n_out_range2)*sizeof(bool) ) ) ;
 
 
@@ -3206,11 +3206,11 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     {
         // in-range map for particle n
         int n_in_range_n = map_sizes_inrange[n] ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
+        checkCudaErrors( cudaMemcpy( dev_maps_combined+offset,
                                     dev_maps_updated+offset_updated,
                                     n_in_range_n*sizeof(GaussianType),
                                     cudaMemcpyDeviceToDevice) ) ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
+        checkCudaErrors( cudaMemcpy( dev_merged_flags_combined+offset,
                                     dev_merged_flags+offset_updated,
                                     n_in_range_n*sizeof(bool)
                                     ,cudaMemcpyDeviceToDevice ) ) ;
@@ -3219,11 +3219,11 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
 
         // nearly in range map for particle n
         vector<char> merged_flags_out(n_out_range2_vec[n],0) ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_maps_combined+offset,
+        checkCudaErrors( cudaMemcpy( dev_maps_combined+offset,
                                     &features_out2[offset_out],
                                     n_out_range2_vec[n]*sizeof(GaussianType),
                                     cudaMemcpyHostToDevice ) ) ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags_combined+offset,
+        checkCudaErrors( cudaMemcpy( dev_merged_flags_combined+offset,
                                     &merged_flags_out[0],
                                     n_out_range2_vec[n]*sizeof(bool),
                                     cudaMemcpyHostToDevice) ) ;
@@ -3235,16 +3235,16 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     }
 
     DEBUG_VAL(combined_size) ;
-    CUDA_SAFE_CALL( cudaMalloc((void**)&dev_maps_merged,
+    checkCudaErrors( cudaMalloc((void**)&dev_maps_merged,
                            combined_size ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc((void**)&dev_n_merged,
+    checkCudaErrors( cudaMalloc((void**)&dev_n_merged,
                                n_particles*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc((void**)&dev_map_offsets,
+    checkCudaErrors( cudaMalloc((void**)&dev_map_offsets,
                                (n_particles+1)*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMemcpy( dev_map_offsets, &map_offsets[0],
+    checkCudaErrors( cudaMemcpy( dev_map_offsets, &map_offsets[0],
                                 (n_particles+1)*sizeof(int),
                                 cudaMemcpyHostToDevice ) ) ;
-    CUDA_SAFE_THREAD_SYNC() ;
+    //
 
 
     thrust::device_ptr<bool> ptr_flags(dev_merged_flags_combined) ;
@@ -3254,11 +3254,11 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     phdUpdateMergeKernel<<<n_particles,256>>>
         ( dev_maps_combined, dev_maps_merged, dev_n_merged,
           dev_merged_flags_combined, dev_map_offsets, n_particles ) ;
-    CUDA_SAFE_THREAD_SYNC() ;
+    //
 
 //    // copy one feature and look at it
 //    GaussianType feature_test ;
-//    CUDA_SAFE_CALL(cudaMemcpy(&feature_test,dev_maps_merged,sizeof(GaussianType),cudaMemcpyDeviceToHost) ) ;
+//    checkCudaErrors(cudaMemcpy(&feature_test,dev_maps_merged,sizeof(GaussianType),cudaMemcpyDeviceToHost) ) ;
 //    cout << "first merged feature: " << endl ;
 //    print_feature(feature_test) ;
 
@@ -3268,11 +3268,11 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     map_sizes_merged = (int*)malloc( n_particles*sizeof(int) ) ;
 
     // copy outputs
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMemcpy( maps_merged, dev_maps_merged,
                             combined_size,
                             cudaMemcpyDeviceToHost ) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMemcpy( map_sizes_merged, dev_n_merged,
                             n_particles*sizeof(int),
                             cudaMemcpyDeviceToHost ) ) ;
@@ -3302,12 +3302,12 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
 
     free(maps_merged) ;
     free(map_sizes_merged) ;
-    CUDA_SAFE_CALL( cudaFree( dev_maps_combined ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_maps_merged ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_merged_flags_combined ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_n_merged ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_maps_updated) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_merged_flags) ) ;
+    checkCudaErrors( cudaFree( dev_maps_combined ) ) ;
+    checkCudaErrors( cudaFree( dev_maps_merged ) ) ;
+    checkCudaErrors( cudaFree( dev_merged_flags_combined ) ) ;
+    checkCudaErrors( cudaFree( dev_n_merged ) ) ;
+    checkCudaErrors( cudaFree( dev_maps_updated) ) ;
+    checkCudaErrors( cudaFree( dev_merged_flags) ) ;
 }
 
 
@@ -3373,15 +3373,15 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
     DEBUG_VAL(n_measure) ;
 
     // copy measurements to device
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMemcpyToSymbol( Z, &measurements[0],
                                     n_measure*sizeof(RangeBearingMeasurement) ) ) ;
 
     // copy particle poses to device
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
             cudaMalloc( (void**)&dev_poses,
                         n_particles*sizeof(ConstantVelocityState) ) ) ;
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMemcpy(dev_poses,&particles.states[0],
                            n_particles*sizeof(ConstantVelocityState),
                            cudaMemcpyHostToDevice) ) ;
@@ -3411,7 +3411,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
     }
 
     // allocate arrays for particle weight update
-    CUDA_SAFE_CALL(
+    checkCudaErrors(
                 cudaMalloc((void**)&dev_particle_weights,
                            n_particles*sizeof(REAL) ) ) ;
 
@@ -3434,9 +3434,9 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             dev_maps_updated_static, dev_maps_updated_dynamic,
             dev_merged_flags_static, dev_merged_flags_dynamic,
             dev_particle_weights);
-        CUDA_SAFE_THREAD_SYNC() ;
-        CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_dynamic ) ) ;
-        CUDA_SAFE_CALL( cudaFree( dev_map_offsets_dynamic ) ) ;
+        //
+        checkCudaErrors( cudaFree( dev_maps_inrange_dynamic ) ) ;
+        checkCudaErrors( cudaFree( dev_map_offsets_dynamic ) ) ;
     }
     else if(config.featureModel==STATIC_MODEL)
     {
@@ -3487,10 +3487,10 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             }
         }
         Gaussian2D* dev_births = NULL ;
-        CUDA_SAFE_CALL(cudaMalloc(
+        checkCudaErrors(cudaMalloc(
                            (void**)&dev_births,
                            n_births*sizeof(Gaussian2D))) ;
-        CUDA_SAFE_CALL(cudaMemcpy(
+        checkCudaErrors(cudaMemcpy(
                            dev_births,&births[0],
                            n_births*sizeof(Gaussian2D),
                            cudaMemcpyHostToDevice)) ;
@@ -3501,7 +3501,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
         int n_preupdate = n_features_total*n_measure ;
         DEBUG_VAL(n_preupdate) ;
         Gaussian2D* dev_features_preupdate = NULL ;
-        CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_preupdate,
+        checkCudaErrors(cudaMalloc((void**)&dev_features_preupdate,
                                   n_preupdate*sizeof(Gaussian2D))) ;
 
 
@@ -3514,20 +3514,20 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
 //            DEBUG_VAL(pose_idx[i]) ;
 //        }
         int* dev_pose_idx = NULL ;
-        CUDA_SAFE_CALL(cudaMalloc((void**)&dev_pose_idx,
+        checkCudaErrors(cudaMalloc((void**)&dev_pose_idx,
                                   n_features_total*sizeof(int))) ;
-        CUDA_SAFE_CALL(cudaMemcpy(dev_pose_idx,&pose_idx[0],
+        checkCudaErrors(cudaMemcpy(dev_pose_idx,&pose_idx[0],
                                   n_features_total*sizeof(int),
                                   cudaMemcpyHostToDevice)) ;
 
         // create pd vector
         REAL* dev_features_pd = NULL ;
-        CUDA_SAFE_CALL(cudaMalloc((void**)&dev_features_pd,
+        checkCudaErrors(cudaMalloc((void**)&dev_features_pd,
                                  n_features_total*sizeof(REAL))) ;
         // likelihoods array
         REAL* dev_likelihoods = NULL ;
-        CUDA_SAFE_CALL(cudaMalloc((void**)&dev_likelihoods,
-                                  n_preupdate*sizeof(REAL)) ;
+        checkCudaErrors(cudaMalloc((void**)&dev_likelihoods,
+                                  n_preupdate*sizeof(REAL) ) ) ;
 
         // call the preupdate kernel
         nBlocks = min(int(ceil(n_features_total/256.0)),65535) ;
@@ -3536,7 +3536,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
            dev_poses,dev_pose_idx,dev_maps_inrange_static,
            dev_features_pd,n_features_total,n_measure,
            dev_likelihoods,dev_features_preupdate) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+        //
 
 //        // check preupdate terms
 //        thrust::device_ptr<Gaussian2D> ptr_preupdate(dev_features_preupdate) ;
@@ -3554,7 +3554,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             dev_births, dev_map_offsets_static,n_particles,n_measure,
             dev_maps_updated_static,dev_merged_flags_static,
             dev_particle_weights ) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+        //
         cudaFree(dev_births) ;
         cudaFree(dev_pose_idx) ;
         cudaFree(dev_features_preupdate) ;
@@ -3568,18 +3568,18 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             dev_maps_updated_static,dev_variance,dev_poses, n_measure,
             dev_map_offsets_static,n_particles) ;
         vector<REAL> variances(n_particles) ;
-        cudaMemcpy(&particles.variances[0],dev_variances,
+        cudaMemcpy(&particles.variances[0],dev_variance,
                 n_particles*sizeof(REAL),cudaMemcpyDeviceToHost) ;
         cudaFree(dev_variance) ;
 
         // RBPHD single-feature likelihood
         if (config.particleWeighting == 2 && n_preupdate > 0){
             vector<REAL> likelihoods(n_preupdate) ;
-            CUDA_SAFE_CALL(cudaMemcpy(&likelihoods[0],dev_likelihoods,
+            checkCudaErrors(cudaMemcpy(&likelihoods[0],dev_likelihoods,
                                       n_preupdate*sizeof(REAL),
                                       cudaMemcpyDeviceToHost)) ;
 
-            CUDA_SAFE_CALL(cudaMemcpy(&map_offsets_in_static[0],
+            checkCudaErrors(cudaMemcpy(&map_offsets_in_static[0],
                                       dev_map_offsets_static,
                                       (n_particles+1)*sizeof(int),
                                       cudaMemcpyDeviceToHost)) ;
@@ -3608,13 +3608,13 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
                             + n*n_measure ;
                     int idx_max_feature = offset_update + (max_m+1)*n_features_n
                             + max_i ;
-                    CUDA_SAFE_CALL(cudaMemcpy(&max_features[n],
+                    checkCudaErrors(cudaMemcpy(&max_features[n],
                                               dev_maps_updated_static+idx_max_feature,
                                               sizeof(Gaussian2D),
-                                              devMemcpyDeviceToHost)) ;
+                                              cudaMemcpyDeviceToHost)) ;
                 }
                 cn_predict[n] = sumGaussianMixtureWeights(particles.maps_static[n]) ;
-                max_likelihood[n] = max_likelihood ;
+                max_likelihoods[n] = max_likelihood ;
                 predict_vals[n] = evalGaussianMixture(particles.maps_static[n],
                                                        max_features[n].mean) ;
             }
@@ -3643,13 +3643,13 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
 //            dev_poses, dev_maps_inrange_dynamic,dev_map_offsets_dynamic,
 //            n_particles,n_measure,dev_maps_updated_dynamic,
 //            dev_merged_flags_dynamic,dev_particle_weights) ;
-        CUDA_SAFE_THREAD_SYNC() ;
+        //
     }
     cudaPrintfDisplay(stdout,false) ;
     cudaPrintfEnd();
 
-    CUDA_SAFE_CALL( cudaFree( dev_maps_inrange_static ) ) ; 
-    CUDA_SAFE_CALL( cudaFree( dev_map_offsets_static ) ) ;
+    checkCudaErrors( cudaFree( dev_maps_inrange_static ) ) ;
+    checkCudaErrors( cudaFree( dev_map_offsets_static ) ) ;
 
 
 //    // check input weights against merge flags
@@ -3657,7 +3657,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
 //    bool* merged_flags = (bool*)malloc(n_update_dynamic*sizeof(bool)) ;
 //    Gaussian4D* maps_updated = (Gaussian4D*)malloc( n_update_dynamic*sizeof(Gaussian4D) ) ;
 //    cudaMemcpy( merged_flags, dev_merged_flags_dynamic, n_update_dynamic*sizeof(bool),cudaMemcpyDeviceToHost) ;
-//    CUDA_SAFE_CALL(
+//    checkCudaErrors(
 //                cudaMemcpy( maps_updated, dev_maps_updated_dynamic,
 //                            n_update_dynamic*sizeof(Gaussian4D),
 //                            cudaMemcpyDeviceToHost ) ) ;
@@ -3710,7 +3710,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
     DEBUG_MSG("Updating Particle Weights") ;
     if(config.particleWeighting != 2){
         REAL* particle_weights = (REAL*)malloc(n_particles*sizeof(REAL)) ;
-        CUDA_SAFE_CALL( cudaMemcpy(particle_weights,dev_particle_weights,
+        checkCudaErrors( cudaMemcpy(particle_weights,dev_particle_weights,
                                    n_particles*sizeof(REAL),
                                    cudaMemcpyDeviceToHost ) ) ;
         // multiply weights by multi-object likelihood
@@ -3731,8 +3731,8 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
     }
 
     // free memory
-    CUDA_SAFE_CALL( cudaFree( dev_particle_weights ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_poses ) ) ;
+    checkCudaErrors( cudaFree( dev_particle_weights ) ) ;
+    checkCudaErrors( cudaFree( dev_poses ) ) ;
     return particlesPreMerge ;
 }
 
@@ -3791,28 +3791,28 @@ vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
     int* dev_merged_sizes = NULL ;
     bool* dev_merged_flags = NULL ;
     int* dev_map_sizes = NULL ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_in,
+    checkCudaErrors( cudaMalloc( (void**)&dev_maps_in,
                                 total_features*sizeof(GaussianType) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_maps_out,
+    checkCudaErrors( cudaMalloc( (void**)&dev_maps_out,
                                 total_features*sizeof(GaussianType) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_sizes,
+    checkCudaErrors( cudaMalloc( (void**)&dev_merged_sizes,
                                 n_particles*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_map_sizes,
+    checkCudaErrors( cudaMalloc( (void**)&dev_map_sizes,
                                 n_particles*sizeof(int) ) ) ;
-    CUDA_SAFE_CALL( cudaMalloc( (void**)&dev_merged_flags,
+    checkCudaErrors( cudaMalloc( (void**)&dev_merged_flags,
                                 total_features*sizeof(bool) ) ) ;
     for ( int n = n_particles/2 ; n > 0 ; n >>= 1 )
     {
         DEBUG_VAL(n) ;
         for ( int i = 0 ; i < n ; i++ )
             map_sizes[i] = merged_sizes[2*i] + merged_sizes[2*i+1] ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_map_sizes, map_sizes,
+        checkCudaErrors( cudaMemcpy( dev_map_sizes, map_sizes,
                                     n*sizeof(int),
                                     cudaMemcpyHostToDevice ) ) ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_maps_in, all_features,
+        checkCudaErrors( cudaMemcpy( dev_maps_in, all_features,
                                     total_features*sizeof(GaussianType),
                                     cudaMemcpyHostToDevice) ) ;
-        CUDA_SAFE_CALL( cudaMemcpy( dev_merged_flags, merged_flags,
+        checkCudaErrors( cudaMemcpy( dev_merged_flags, merged_flags,
                                     total_features*sizeof(bool),
                                     cudaMemcpyHostToDevice)) ;
         // kernel launch
@@ -3820,10 +3820,10 @@ vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
             dev_maps_in, dev_maps_out, dev_merged_sizes,
             dev_merged_flags, dev_map_sizes, n ) ;
 
-        CUDA_SAFE_CALL( cudaMemcpy( maps_out, dev_maps_out,
+        checkCudaErrors( cudaMemcpy( maps_out, dev_maps_out,
                                     total_features*sizeof(GaussianType),
                                     cudaMemcpyDeviceToHost) ) ;
-        CUDA_SAFE_CALL( cudaMemcpy( merged_sizes, dev_merged_sizes,
+        checkCudaErrors( cudaMemcpy( merged_sizes, dev_merged_sizes,
                                     n*sizeof(int), cudaMemcpyDeviceToHost ) ) ;
         int offset_in = 0 ;
         int offset_out = 0 ;
@@ -3840,11 +3840,11 @@ vector<GaussianType> computeExpectedMap(vector<vector <GaussianType> > maps,
     vector<GaussianType> expected_map(total_features) ;
     std::copy( all_features,all_features+total_features, expected_map.begin() ) ;
 
-    CUDA_SAFE_CALL( cudaFree( dev_maps_in ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_maps_out ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_merged_sizes ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_merged_flags ) ) ;
-    CUDA_SAFE_CALL( cudaFree( dev_map_sizes ) ) ;
+    checkCudaErrors( cudaFree( dev_maps_in ) ) ;
+    checkCudaErrors( cudaFree( dev_maps_out ) ) ;
+    checkCudaErrors( cudaFree( dev_merged_sizes ) ) ;
+    checkCudaErrors( cudaFree( dev_merged_flags ) ) ;
+    checkCudaErrors( cudaFree( dev_map_sizes ) ) ;
     free(all_features) ;
     free(merged_flags) ;
     free(maps_out) ;
@@ -3861,7 +3861,7 @@ bool expectedFeaturesPredicate( GaussianType g )
 void
 setDeviceConfig( const SlamConfig& config )
 {
-    CUDA_SAFE_CALL(cudaMemcpyToSymbol( dev_config, &config, sizeof(SlamConfig) ) ) ;
+    checkCudaErrors(cudaMemcpyToSymbol( dev_config, &config, sizeof(SlamConfig) ) ) ;
 //    seed_rng();
 }
 
@@ -4904,7 +4904,7 @@ disparityUpdate(DisparitySLAM& slam,
          raw_pointer_cast(&dev_merge_flags[0]),
          raw_pointer_cast(&dev_weights[0])) ;
 
-    CUDA_SAFE_THREAD_SYNC() ;
+    //
 //    cudaPrintfDisplay() ;
     cudaPrintfEnd();
 
@@ -4948,7 +4948,7 @@ disparityUpdate(DisparitySLAM& slam,
       raw_pointer_cast(&dev_merge_flags[0]),
       raw_pointer_cast(&dev_map_offsets[0]),
       slam.n_particles) ;
-    CUDA_SAFE_THREAD_SYNC() ;
+    //
 
     // copy out the results of the GM reduction, leaving only valid gaussians
     host_vector<int> merged_sizes = dev_merged_sizes ;

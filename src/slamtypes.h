@@ -319,7 +319,7 @@ public:
         new_particles.states.clear();
         new_particles.variances.clear();
         new_particles.n_particles = indices.size() ;
-        for ( int n = 0 ; n < indices.size() ; n++ ){
+        for ( unsigned int n = 0 ; n < indices.size() ; n++ ){
             int i = indices[n] ;
             new_particles.maps_static.push_back(maps_static[i]);
             new_particles.maps_dynamic.push_back(maps_dynamic[i]);

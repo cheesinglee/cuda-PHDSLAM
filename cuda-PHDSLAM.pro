@@ -28,6 +28,8 @@ PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
 DESTDIR = $$PROJECT_DIR/bin
 
+QMAKE_CC = gcc-4.4.6
+QMAKE_CXX = g++-4.4.6
 QMAKE_CXXFLAGS += -DDEBUG
 QMAKE_CXXFLAGS += -O0 -g
 QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissive -fno-strict-aliasing
@@ -43,26 +45,18 @@ LIBS   -= -lQtGui -lQtCore
 #### MATLAB external interface ###############################################
 #MATLAB_PATH = /home/cheesinglee/matlab2010a/
 #MATLAB_PATH = /opt/Matlab-R2010a/ # llebre
-MATLAB_PATH = /opt/Matlab # kermit
-QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
-QMAKE_LIBDIR += $$MATLAB_PATH/bin/glnxa64/
-LIBS += -lmx -lmat
-INCLUDEPATH += $$MATLAB_PATH/extern/include
+#MATLAB_PATH = /usr/local/MATLAB/R2012b
+#QMAKE_RPATHDIR += $$MATLAB_PATH/bin/glnxa64
+#QMAKE_LIBDIR += $$MATLAB_PATH/bin/glnxa64/
+#QMAKE_LFLAGS += -Xlinker -rpath-link $$MATLAB_PATH/bin/glnxa64/
+#LIBS += -lmx -lmat
+#INCLUDEPATH += $$MATLAB_PATH/extern/include
+LIBS += -lmatio
 ##############################################################################
 
 #### Boost libraries ###################################################
 LIBS += -lboost_program_options -lboost_random -lboost_serialization
 ######################################################################
-
-#### FFTW libraries ######################################################
-# needs to be statically linked to avoid conflicts with the MATLAB libs
-#LIBS += -lfftw3 -lm
-##########################################################################
-
-#### CImg libraries ######################################################
-LIBS += -lX11 -lpthread
-##########################################################################
-
 
 #### CUDA setup ########################################################
 
@@ -80,11 +74,11 @@ CUDA_LIBS -= -lboost_program_options
 
 # Path to cuda SDK install
 #CUDA_SDK = /usr/cuda/sdk/C # boromir
-CUDA_SDK = /usr/share/cuda-sdk/C # kermit
-#CUDA_SDK = /opt/cuda/sdk/C
+#CUDA_SDK = /usr/share/cuda-sdk/C # kermit
+CUDA_SDK = /opt/cuda/samples
 # Path to cuda toolkit install
-#CUDA_DIR = /usr/cuda/ # for my machines
-CUDA_DIR = /usr/lib/nvidia-cuda-toolkit # kermit
+CUDA_DIR = /opt/cuda # for my machines
+#CUDA_DIR = /usr/lib/nvidia-cuda-toolkit # kermit
 #CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
 #CUDA_GENCODE = arch=compute_13,code=sm_13
@@ -92,18 +86,17 @@ CUDA_GENCODE = arch=compute_20,code=sm_20
 # nvcc flags (ptxas option verbose is always useful)
 CUDA_GCC_BINDIR=/opt/gcc-4.4
 #CUDA_GCC_BINDIR=/usr/bin
-NVCCFLAGS = --compiler-options -fno-strict-aliasing,-fpermissive --ptxas-options=-v --compiler-bindir=$$CUDA_GCC_BINDIR --linker-options -rpath=$$MATLAB_PATH/bin/glnxa64
+NVCCFLAGS = --compiler-options -fno-strict-aliasing,-fpermissive --compiler-bindir=$$CUDA_GCC_BINDIR --linker-options -rpath=$$MATLAB_PATH/bin/glnxa64
 # include paths
 INCLUDEPATH += $$CUDA_DIR/include/cuda/
 INCLUDEPATH += $$CUDA_DIR/include/
 INCLUDEPATH += $$CUDA_SDK/common/inc/
-INCLUDEPATH += $$CUDA_SDK/../shared/inc/
 # lib dirs
 QMAKE_LIBDIR += $$CUDA_DIR/lib64
 QMAKE_LIBDIR += $$CUDA_SDK/lib
 QMAKE_LIBDIR += $$CUDA_SDK/common/lib
 # libs - note than i'm using a x_86_64 machine
-LIBS += -lcudart -lcutil_x86_64
+LIBS += -lcudart
 # join the includes in a line
 CUDA_INC = $$join(INCLUDEPATH,' -I','-I',' ')
 
