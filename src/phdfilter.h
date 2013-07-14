@@ -8,6 +8,9 @@
 //initCphdConstants() ;
 
 void
+initRandomNumberGenerators() ;
+
+void
 predictMap(SynthSLAM& p) ;
 
 void

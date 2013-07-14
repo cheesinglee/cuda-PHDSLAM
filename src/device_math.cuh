@@ -3,6 +3,7 @@
 
 #include "slamtypes.h"
 #include <float.h>
+#include <curand_kernel.h>
 
 /// a nan-safe logarithm
 __device__ __host__
@@ -105,11 +106,11 @@ invert_matrix4( float *A, float *Ainv)
 }
 
 __device__ float
-evalGaussian(Gaussian2D g, float* p){
+evalGaussian(Gaussian2D g, float2 p){
     // distance from mean
     float d[2] ;
-    d[0] = g.mean[0] - p[0] ;
-    d[1] = g.mean[1] - p[1] ;
+    d[0] = g.mean[0] - p.x ;
+    d[1] = g.mean[1] - p.y ;
 
     // inverse covariance matrix
     float S_inv[4] ;
@@ -554,6 +555,53 @@ logSumExp( std::vector<T> vals ){
         sum += exp(vals[i]-maxval) ;
     }
     return safeLog(sum) + maxval ;
+}
+
+
+/// Lower Cholesky decomposition of a square matrix.
+/// No check for positive-definiteness is performed.
+__device__ __host__
+void cholesky(float* A, float* L, int dims){
+    L[0] = sqrt(A[0]) ;
+    for (int i = 0 ; i < dims ; i++){
+        for ( int j = 0 ; j < i ; j++){
+            int ij = i + j*dims ;
+            float tmp = A[ij] ;
+            if ( i == j ){
+                for (int k = 0 ; k < j-1 ; k++){
+                    int jk = j + k*dims ;
+                    tmp -= L[jk]*L[jk] ;
+                }
+                L[ij] = sqrt(tmp) ;
+            }
+            else{
+                for ( int k = 0 ; k < j-1 ; k++){
+                    int ik = i + k*dims ;
+                    int jk = j + k*dims ;
+                    tmp -= L[ik]*L[jk] ;
+                }
+                int jj = j + j*dims ;
+                L[ij] = tmp/L[jj] ;
+            }
+        }
+    }
+}
+
+__device__
+float2 sampleGaussian(Gaussian2D g, curandStateMRG32k3a* rng_state){
+    float2 val = curand_normal2(rng_state) ;
+    float L[4] ;
+    cholesky(g.cov,L,2);
+    float2 result ;
+    result.x = g.mean[0] + (val.x*L[0] + val.y*L[2]) ;
+    result.y = g.mean[1] + (val.x*L[1] + val.y*L[3]) ;
+    return result ;
+}
+
+__device__
+float sampleAndEvalGaussian(Gaussian2D g, curandStateMRG32k3a* rng_state){
+    float2 sample = sampleGaussian(g,rng_state) ;
+    return evalGaussian(g,sample) ;
 }
 
 

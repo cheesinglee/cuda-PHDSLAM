@@ -8,7 +8,8 @@ SOURCES += src/main.cpp \
     src/rng.cpp \
     src/slamplot.cpp \
     src/disparity.cu \
-    src/gm_reduce.cpp
+    src/gm_reduce.cpp \
+    src/scphd_cpu.cpp
 
 HEADERS += \
     src/slamparams.h \
@@ -18,7 +19,9 @@ HEADERS += \
     src/phdfilter.h \
     src/slamplot.h \
     src/disparity.h \
-    src/gm_reduce.h
+    src/gm_reduce.h \
+    src/models.h \
+    src/AckermanMotionModel.h
 
 OTHER_FILES += \
     cfg/config.cfg
@@ -28,8 +31,8 @@ PROJECT_DIR = $$system(pwd)
 OBJECTS_DIR = $$PROJECT_DIR/Obj
 DESTDIR = $$PROJECT_DIR/bin
 
-QMAKE_CC = gcc-4.4.6
-QMAKE_CXX = g++-4.4.6
+QMAKE_CC = gcc-4.4
+QMAKE_CXX = g++-4.4
 QMAKE_CXXFLAGS += -DDEBUG
 QMAKE_CXXFLAGS += -O0 -g
 QMAKE_CXXFLAGS += -Wall -Wno-deprecated -fpic -DOC_NEW_STYLE_INCLUDES -fpermissive -fno-strict-aliasing
@@ -82,7 +85,7 @@ CUDA_DIR = /opt/cuda # for my machines
 #CUDA_DIR = /opt/cuda/ # for llebre
 # GPU architecture
 #CUDA_GENCODE = arch=compute_13,code=sm_13
-CUDA_GENCODE = arch=compute_20,code=sm_20
+CUDA_GENCODE = -gencode=arch=compute_20,code=sm_20 -gencode=arch=compute_30,code=sm_30
 # nvcc flags (ptxas option verbose is always useful)
 CUDA_GCC_BINDIR=/opt/gcc-4.4
 #CUDA_GCC_BINDIR=/usr/bin
@@ -104,7 +107,7 @@ CUDA_INC = $$join(INCLUDEPATH,' -I','-I',' ')
 cuda.input = CUDA_SOURCES
 cuda.output = ${OBJECTS_DIR}${QMAKE_FILE_BASE}_cuda.o
 
-cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -DTHRUST_DEBUG -O0 -gencode=$$CUDA_GENCODE -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
+cuda.commands = $$CUDA_DIR/bin/nvcc -m64 -g -G -DTHRUST_DEBUG -O0 $$CUDA_GENCODE -c $$NVCCFLAGS $$CUDA_INC $$CUDA_LIBS  ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
 
 cuda.dependcy_type = TYPE_C
 cuda.depend_command = $$CUDA_DIR/bin/nvcc -g -G -M $$CUDA_INC $$NVCCFLAGS ${QMAKE_FILE_NAME}

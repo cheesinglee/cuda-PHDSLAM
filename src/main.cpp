@@ -989,7 +989,7 @@ void loadConfig(const char* filename)
             ("pd", value<REAL>(&config.pd)->default_value(0.98), "Nominal probability of detection for in-range features")
             ("ps", value<REAL>(&config.ps)->default_value(0.98), "Nominal probability of survival for dynamic features")
             ("n_particles", value<int>(&config.n_particles)->default_value(512), "Number of vehicle pose particles")
-			("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
+            ("n_predict_particles", value<int>(&config.nPredictParticles)->default_value(1), "Number of new vehicle pose particles to spawn for each prior particle when doing prediction")
             ("resample_threshold", value<REAL>(&config.resampleThresh)->default_value(0.15), "Threshold on normalized nEff for particle resampling")
             ("subdivide_predict", value<int>(&config.subdividePredict)->default_value(1), "Perform the prediction over several shorter time intervals before the update")
             ("birth_weight", value<REAL>(&config.birthWeight)->default_value(0.05), "Weight of birth features")
@@ -1004,7 +1004,7 @@ void loadConfig(const char* filename)
             ("min_feature_weight", value<REAL>(&config.minFeatureWeight)->default_value(0.00001), "Minimum feature weight")
             ("particle_weighting", value<int>(&config.particleWeighting)->default_value(1), "Particle weighting scheme: 1 = cluster process 2 = Vo's")
             ("daughter_mixture_type", value<int>(&config.daughterMixtureType)->default_value(0), "0: Gaussian, 1: Particle")
-            ("n_daughter_particles", value<int>(&config.nDaughterParticles)->default_value(50), "Number of particles to represet each map landmark")
+            ("n_samples", value<int>(&config.nSamples)->default_value(50), "Number of samples to take for each feature when computing variance")
             ("max_cardinality", value<int>(&config.maxCardinality)->default_value(256), "Maximum cardinality for CPHD filter")
             ("filter_type", value<int>(&config.filterType)->default_value(1), "0 = PHD, 1 = CPHD")
             ("map_estimate", value<int>(&config.mapEstimate)->default_value(1), "Map state estimate 0 = MAP, 1 = EAP")
@@ -1159,7 +1159,7 @@ void run_synth(bool profile_run){
     vector<REAL> cn_estimate ;
     REAL nEff ;
     REAL dt = 0 ;
-    int z_idx = 0 ;
+    unsigned int z_idx = 0 ;
     int c_idx = 0 ;
     AckermanControl current_control ;
     current_control.alpha = 0 ;
@@ -1461,6 +1461,7 @@ int main(int argc, char *argv[])
     DEBUG_MSG("Loading configuration file") ;
     config_filename = argv[1] ;
     loadConfig( config_filename.data() ) ;
+    initRandomNumberGenerators() ;
     setDeviceConfig( config ) ;
 
     string run_type ;

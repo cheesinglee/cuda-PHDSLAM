@@ -223,7 +223,7 @@ typedef struct{
     REAL minFeatureWeight ;
     int particleWeighting ;
     int daughterMixtureType ;
-    int nDaughterParticles ;
+    int nSamples ;
     int maxCardinality ;
     int filterType ;
     int distanceMetric ;
@@ -331,6 +331,9 @@ public:
         new_particles.resample_idx = indices ;
         return new_particles ;
     }
+
+    void predict_cpu(MotionModel m) ;
+    void update_cpu(measurementSet Z) ;
 };
 
 

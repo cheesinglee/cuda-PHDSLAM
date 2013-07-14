@@ -30,6 +30,7 @@
 #include "device_math.cuh"
 
 #include <helper_cuda.h>
+#include <curand_kernel.h>
 
 #include <thrust/version.h>
 #include <thrust/host_vector.h>
@@ -67,6 +68,9 @@
 //--- Make kernel helper functions externally visible
 void
 initCphdConstants() ;
+
+void
+initRandomNumberGenerators() ;
 
 void
 predictMap(SynthSLAM& p) ;
@@ -116,6 +120,9 @@ using namespace thrust ;
 __device__ __constant__ RangeBearingMeasurement Z[256] ;
 __device__ __constant__ SlamConfig dev_config ;
 
+// RNG state variables
+__device__ curandStateMRG32k3a_t* devRNGStates ;
+
 // other global device variables
 REAL* dev_C ;
 REAL* dev_factorial ;
@@ -126,6 +133,26 @@ REAL* dev_cn_clutter ;
 
 //ConstantVelocityModelProps modelProps  = {STDX, STDY,STDTHETA} ;
 //ConstantVelocity2DKinematicModel motionModel(modelProps) ;
+
+__global__ void initRNGKernel(){
+    int tid = blockIdx.x*blockDim.x + threadIdx.x ;
+    curand_init(0,tid,0,&devRNGStates[tid]);
+}
+
+void initRandomNumberGenerators(){
+    int n = config.nSamples ;
+    curandStateMRG32k3a_t* states ;
+    checkCudaErrors(cudaMalloc((void**)&states,
+                               n*sizeof(curandStateMRG32k3a_t))
+                    ) ;
+    checkCudaErrors(cudaMemcpyToSymbol(devRNGStates,&states,
+                                       sizeof(curandStateMRG32k3a_t*))
+                    ) ;
+    int nBlocks = ceil(n/512.0) ;
+    int nThreads = min(512,n) ;
+    DEBUG_MSG("Initializing Random Number Generators") ;
+    initRNGKernel<<<nBlocks,nThreads>>>() ;
+}
 
 /// helper function for outputting a Gaussian to std_out
 template<class GaussianType>
@@ -2317,8 +2344,8 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
     int update_offset_dynamic = 0 ;
     int n_update_static = 0 ;
     int n_update_dynamic = 0 ;
-    int preupdate_stride_static = map_offsets_static[n_particles] ;
-    int preupdate_stride_dynamic = map_offsets_dynamic[n_particles] ;
+//    int preupdate_stride_static = map_offsets_static[n_particles] ;
+//    int preupdate_stride_dynamic = map_offsets_dynamic[n_particles] ;
 
     REAL cardinality_predict = 0 ;
     REAL particle_weight = 0 ;
@@ -2609,30 +2636,25 @@ phdUpdateKernelMixed(ConstantVelocityState* poses,
 
 /// Compute the integrated variance among the updated features.
 /**
- * Non-detection, detection, and birth terms are sampled in a polar grid in the
- * vehicle FOV. Block operates on a single parent particle, and each thread
- * computes a single grid point
+ * Non-detection, detection, and birth terms are sampled and summed.
+ * Block operates on a single parent particle, and each thread
+ * computes a single sample for each term.
  */
 template <class GaussianType>
 __global__ void
 phdVarianceKernel(GaussianType* updated_features, REAL* variances,
-                  ConstantVelocityState* poses,
                   int n_measure, int* map_offsets, int n_particles)
 {
     // initialize local varaibles
     unsigned int predict_offset = 0 ;
     unsigned int update_offset = 0 ;
-    unsigned int preupdate_offset = 0 ;
     unsigned int n_features = 0 ;
     unsigned int n_update = 0 ;
 
     // initialized shared memory
     __shared__ REAL sdata[256] ;
 
-    // relative range and bearing for thread
     unsigned int tid = threadIdx.x + blockDim.y*threadIdx.y ;
-    REAL range = dev_config.maxRange/blockDim.x*threadIdx.x ;
-    REAL theta = dev_config.maxBearing/blockDim.y*threadIdx.y ;
 
     for ( int map_idx = blockIdx.x ; map_idx < n_particles ; map_idx += gridDim.x )
     {
@@ -2640,26 +2662,23 @@ phdVarianceKernel(GaussianType* updated_features, REAL* variances,
         predict_offset = map_offsets[map_idx] ;
         update_offset = predict_offset*(n_measure+1) +
                 map_idx*n_measure ;
-        preupdate_offset = predict_offset ;
         n_features = map_offsets[map_idx+1] - map_offsets[map_idx] ;
         n_update = (n_features)*(n_measure+1) + n_measure ;
 
         // initialize output
-        if (tid == 0)
+        if (threadIdx.x == 0)
             variances[map_idx] = 0 ;
 
-        // compute this thread's location
-        ConstantVelocityState pose = poses[map_idx] ;
-        REAL p[2] ;
-        p[0] = pose.px + range*cos(theta+pose.ptheta) ;
-        p[1] = pose.py + range*sin(theta+pose.ptheta) ;
-
         REAL sum = 0 ;
+
+        // make a local copy of the RNG state
+        curandStateMRG32k3a_t rng_state = devRNGStates[threadIdx.x] ;
+        skipahead((unsigned long long)tid,&rng_state);
 
         // sample and sum all update components
         for ( unsigned int i = 0 ; i < n_update ; i++){
             unsigned int idx = update_offset + i ;
-            REAL val = evalGaussian(updated_features[idx],p) ;
+            REAL val = sampleAndEvalGaussian(updated_features[idx],&rng_state) ;
             // non-detection term: just add the value
             if ( i < n_features ){
                 sum += val ;
@@ -2670,13 +2689,16 @@ phdVarianceKernel(GaussianType* updated_features, REAL* variances,
             }
         }
 
+        // update the RNG state in global memory
+        if (blockIdx.x == 0)
+            devRNGStates[threadIdx.x] = rng_state ;
+
         // compute final sum
-        unsigned int total_threads = blockDim.x*blockDim.y ;
-        for ( unsigned int i = 0 ; i < total_threads ; i+=256){
-            if (tid >= i && tid < i+256){
+        for ( unsigned int i = 0 ; i < dev_config.nSamples ; i+=256){
+            if (threadIdx.x >= i && threadIdx.x < i+256){
                 sumByReduction(sdata,sum,tid-i);
             }
-            if (tid == 0)
+            if (threadIdx.x == 0)
                 variances[map_idx] += sdata[0] ;
         }
     }
@@ -3254,7 +3276,7 @@ mergeAndCopyMaps(GaussianType*& dev_maps_updated,
     phdUpdateMergeKernel<<<n_particles,256>>>
         ( dev_maps_combined, dev_maps_merged, dev_n_merged,
           dev_merged_flags_combined, dev_map_offsets, n_particles ) ;
-    //
+    checkCudaErrors( cudaDeviceSynchronize() ) ;
 
 //    // copy one feature and look at it
 //    GaussianType feature_test ;
@@ -3434,7 +3456,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             dev_maps_updated_static, dev_maps_updated_dynamic,
             dev_merged_flags_static, dev_merged_flags_dynamic,
             dev_particle_weights);
-        //
+        checkCudaErrors( cudaDeviceSynchronize() ) ;
         checkCudaErrors( cudaFree( dev_maps_inrange_dynamic ) ) ;
         checkCudaErrors( cudaFree( dev_map_offsets_dynamic ) ) ;
     }
@@ -3536,7 +3558,7 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
            dev_poses,dev_pose_idx,dev_maps_inrange_static,
            dev_features_pd,n_features_total,n_measure,
            dev_likelihoods,dev_features_preupdate) ;
-        //
+        checkCudaErrors( cudaDeviceSynchronize() ) ;
 
 //        // check preupdate terms
 //        thrust::device_ptr<Gaussian2D> ptr_preupdate(dev_features_preupdate) ;
@@ -3554,23 +3576,25 @@ phdUpdateSynth(SynthSLAM& particles, measurementSet measurements)
             dev_births, dev_map_offsets_static,n_particles,n_measure,
             dev_maps_updated_static,dev_merged_flags_static,
             dev_particle_weights ) ;
-        //
+        checkCudaErrors( cudaDeviceSynchronize() ) ;
         cudaFree(dev_births) ;
         cudaFree(dev_pose_idx) ;
         cudaFree(dev_features_preupdate) ;
         cudaFree(dev_features_pd) ;
 
         // compute variance
-        REAL* dev_variance ;
-        cudaMalloc((void**)&dev_variance, n_particles*sizeof(REAL)) ;
-        dim3 threadsPerBlock(128,128) ;
-        phdVarianceKernel<<<n_particles,threadsPerBlock>>>(
-            dev_maps_updated_static,dev_variance,dev_poses, n_measure,
+        REAL* dev_variance = NULL ;
+        checkCudaErrors( cudaMalloc((void**)&dev_variance,
+                                    n_particles*sizeof(REAL) ) ) ;
+        int n_threads = config.nSamples ;
+        nBlocks = min(n_particles,65535) ;
+        phdVarianceKernel<<<nBlocks,n_threads>>>(
+            dev_maps_updated_static,dev_variance, n_measure,
             dev_map_offsets_static,n_particles) ;
-        vector<REAL> variances(n_particles) ;
-        cudaMemcpy(&particles.variances[0],dev_variance,
-                n_particles*sizeof(REAL),cudaMemcpyDeviceToHost) ;
-        cudaFree(dev_variance) ;
+        checkCudaErrors( cudaDeviceSynchronize() ) ;
+        checkCudaErrors( cudaMemcpy(&particles.variances[0],dev_variance,
+                n_particles*sizeof(REAL),cudaMemcpyDeviceToHost ) ) ;
+        checkCudaErrors( cudaFree(dev_variance) ) ;
 
         // RBPHD single-feature likelihood
         if (config.particleWeighting == 2 && n_preupdate > 0){
@@ -4088,10 +4112,19 @@ struct is_inrange : public thrust::unary_function<Gaussian3D,bool>
         REAL u = g.mean[0] ;
         REAL v = g.mean[1] ;
         REAL d = g.mean[2] ;
+
+#if !defined(__CUDA_ARCH__)
+        REAL width = config.imageWidth ;
+        REAL height = config.imageHeight ;
+#else
+        REAL width = dev_config.imageWidth ;
+        REAL height = dev_config.imageHeight ;
+#endif
+
         bool in_fov = (u > 0) &&
-            (u <= dev_config.imageWidth) &&
+            (u <= width) &&
             (v >= 0) &&
-            (v <= dev_config.imageHeight) &&
+            (v <= height) &&
             (d >= 0);
         return in_fov ;
     }
